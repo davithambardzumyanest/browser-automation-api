@@ -1,0 +1,267 @@
+### ===== SESSION API EXAMPLES =====
+
+### 1. Create Session (Default Settings)
+POST http://localhost:3000/api/session/create
+Content-Type: application/json
+
+{
+  "headless": true,
+  "width": 1920,
+  "height": 1080
+}
+
+### 2. Create Session (Custom Headers for Google)
+POST http://localhost:3000/api/session/create
+Content-Type: application/json
+
+{
+  "headless": false,
+  "width": 1920,
+  "height": 1080,
+  "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+  "locale": "en-US",
+  "headers": {
+    "Accept-Language": "en-US,en;q=0.9",
+    "Referer": "https://www.google.com/"
+  }
+}
+
+### 3. Create Session (Armenian Locale)
+POST http://localhost:3000/api/session/create
+Content-Type: application/json
+
+{
+  "headless": false,
+  "width": 1920,
+  "height": 1080,
+  "locale": "hy-AM",
+  "headers": {
+    "Accept-Language": "hy-AM,hy;q=0.9,en-US;q=0.8"
+  },
+  "userDataDir": true
+}
+
+### 4. Create Session (Persistent Cookies)
+POST http://localhost:3000/api/session/create
+Content-Type: application/json
+
+{
+  "headless": false,
+  "userDataDir": true,
+  "width": 1280,
+  "height": 800
+}
+
+### 5. List All Active Sessions
+GET http://localhost:3000/api/session/list
+
+### 6. Get Session Info
+GET http://localhost:3000/api/session/{sessionId}
+
+### ===== SESSION OPERATIONS =====
+
+### 7. Navigate to URL
+POST http://localhost:3000/api/session/{sessionId}/goto
+Content-Type: application/json
+
+{
+  "url": "https://www.google.com",
+  "waitUntil": "domcontentloaded",
+  "timeout": 90000
+}
+
+### 8. Navigate with Referer
+POST http://localhost:3000/api/session/{sessionId}/goto
+Content-Type: application/json
+
+{
+  "url": "https://www.google.com/search?q=puppeteer",
+  "waitUntil": "domcontentloaded",
+  "timeout": 90000,
+  "referer": "https://www.google.com/"
+}
+
+### 9. Take Screenshot
+POST http://localhost:3000/api/session/{sessionId}/screenshot
+Content-Type: application/json
+
+{
+  "fullPage": true
+}
+
+### 10. Execute JavaScript
+POST http://localhost:3000/api/session/{sessionId}/execute
+Content-Type: application/json
+
+{
+  "script": "return document.title"
+}
+
+### 11. Get Search Results
+POST http://localhost:3000/api/session/{sessionId}/execute
+Content-Type: application/json
+
+{
+  "script": "return Array.from(document.querySelectorAll('h3')).map(h => h.textContent)"
+}
+
+### 12. Click Element
+POST http://localhost:3000/api/session/{sessionId}/click
+Content-Type: application/json
+
+{
+  "selector": "input[name='btnK']"
+}
+
+### 13. Type Text
+POST http://localhost:3000/api/session/{sessionId}/type
+Content-Type: application/json
+
+{
+  "selector": "textarea[name='q']",
+  "text": "puppeteer automation",
+  "delay": 100
+}
+
+### 14. Get Page Content
+POST http://localhost:3000/api/session/{sessionId}/content
+Content-Type: application/json
+
+{
+  "selector": "body"
+}
+
+### 15. Get Full HTML
+POST http://localhost:3000/api/session/{sessionId}/content
+Content-Type: application/json
+
+{}
+
+### 16. Close Session
+DELETE http://localhost:3000/api/session/{sessionId}
+
+### 17. Close All Sessions
+DELETE http://localhost:3000/api/session/
+
+### ===== COMPLETE WORKFLOW EXAMPLES =====
+
+### Example 1: Google Search Workflow
+# Step 1: Create session
+POST http://localhost:3000/api/session/create
+Content-Type: application/json
+
+{
+  "headless": false,
+  "width": 1920,
+  "height": 1080,
+  "locale": "en-US"
+}
+
+# Step 2: Navigate to Google (use sessionId from step 1)
+POST http://localhost:3000/api/session/{sessionId}/goto
+Content-Type: application/json
+
+{
+  "url": "https://www.google.com"
+}
+
+# Step 3: Type search query
+POST http://localhost:3000/api/session/{sessionId}/type
+Content-Type: application/json
+
+{
+  "selector": "textarea[name='q']",
+  "text": "web scraping"
+}
+
+# Step 4: Click search button
+POST http://localhost:3000/api/session/{sessionId}/click
+Content-Type: application/json
+
+{
+  "selector": "input[name='btnK']"
+}
+
+# Step 5: Get search results
+POST http://localhost:3000/api/session/{sessionId}/execute
+Content-Type: application/json
+
+{
+  "script": "return Array.from(document.querySelectorAll('h3')).map(h => h.textContent)"
+}
+
+# Step 6: Take screenshot
+POST http://localhost:3000/api/session/{sessionId}/screenshot
+Content-Type: application/json
+
+{
+  "fullPage": false
+}
+
+# Step 7: Close session
+DELETE http://localhost:3000/api/session/{sessionId}
+
+### Example 2: Persistent Session with Cookies
+# Step 1: Create persistent session
+POST http://localhost:3000/api/session/create
+Content-Type: application/json
+
+{
+  "headless": false,
+  "userDataDir": true,
+  "width": 1920,
+  "height": 1080
+}
+
+# Step 2: Navigate and login (cookies will be saved)
+POST http://localhost:3000/api/session/{sessionId}/goto
+Content-Type: application/json
+
+{
+  "url": "https://accounts.google.com"
+}
+
+# Step 3: Later, create another session with same userDataDir
+# Cookies will be loaded automatically!
+
+### Example 3: Multiple Sessions
+# Create Session 1 for Google
+POST http://localhost:3000/api/session/create
+Content-Type: application/json
+
+{
+  "headless": true,
+  "locale": "en-US"
+}
+
+# Create Session 2 for Facebook
+POST http://localhost:3000/api/session/create
+Content-Type: application/json
+
+{
+  "headless": true,
+  "locale": "en-US",
+  "headers": {
+    "Referer": "https://www.facebook.com/"
+  }
+}
+
+# Work with both sessions independently
+# Session 1: Google
+POST http://localhost:3000/api/session/{sessionId1}/goto
+Content-Type: application/json
+
+{
+  "url": "https://www.google.com"
+}
+
+# Session 2: Facebook
+POST http://localhost:3000/api/session/{sessionId2}/goto
+Content-Type: application/json
+
+{
+  "url": "https://www.facebook.com"
+}
+
+# List all sessions
+GET http://localhost:3000/api/session/list
