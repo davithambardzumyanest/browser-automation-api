@@ -72,6 +72,8 @@ Creates a new browser session with custom configuration.
 - `locale` (string, default: "en-US") - Browser locale
 - `userDataDir` (boolean, optional) - Enable persistent cookie storage
 - `proxy` (string|object, optional) - Proxy configuration
+- `slowMo` (number, default: 0) - Slow down operations by N milliseconds (debugging)
+- `devtools` (boolean, default: false) - Auto-open Chrome DevTools (debugging)
 
 **Response:**
 ```json
@@ -310,6 +312,127 @@ Get page content (HTML or text).
   "content": "..."
 }
 ```
+
+## Debugging & Development
+
+### Development Mode
+
+For local development, create sessions with debugging features enabled:
+
+```bash
+curl -X POST http://localhost:3000/api/session/create \
+  -H "Content-Type: application/json" \
+  -d '{
+    "headless": false,
+    "slowMo": 250,
+    "devtools": true
+  }'
+```
+
+**Features:**
+- `headless: false` - See the browser window
+- `slowMo: 250` - Slow down operations by 250ms (easy to follow)
+- `devtools: true` - Auto-open Chrome DevTools
+
+### Debugging Options
+
+#### 1. Non-Headless Mode
+```json
+{
+  "headless": false
+}
+```
+Opens a visible browser window so you can watch automation in real-time.
+
+**Perfect for:**
+- Local development
+- Debugging navigation issues
+- Manual CAPTCHA solving
+- Understanding page behavior
+
+#### 2. Slow Motion
+```json
+{
+  "slowMo": 500
+}
+```
+Slows down browser operations by N milliseconds.
+
+**Recommended values:**
+- `100` - Slight delay
+- `250` - Medium delay (good for watching)
+- `500` - Slow delay (very easy to follow)
+- `1000` - Very slow (1 second between operations)
+
+#### 3. DevTools Auto-Open
+```json
+{
+  "devtools": true
+}
+```
+Automatically opens Chrome DevTools when browser launches.
+
+**Use DevTools to:**
+- Debug JavaScript execution
+- Inspect network requests
+- Check console errors
+- Inspect DOM elements
+- Monitor performance
+
+### Complete Debugging Setup
+
+Best configuration for comprehensive debugging:
+
+```bash
+curl -X POST http://localhost:3000/api/session/create \
+  -H "Content-Type: application/json" \
+  -d '{
+    "headless": false,
+    "slowMo": 250,
+    "devtools": true,
+    "width": 1920,
+    "height": 1080
+  }'
+```
+
+This gives you:
+- ✅ Visible browser window
+- ✅ Slowed operations (250ms delay)
+- ✅ DevTools for inspection
+- ✅ Full HD viewport
+
+### Debugging Workflow Example
+
+```bash
+# 1. Create debugging session
+SESSION_ID=$(curl -X POST http://localhost:3000/api/session/create \
+  -H "Content-Type: application/json" \
+  -d '{
+    "headless": false,
+    "slowMo": 500,
+    "devtools": true
+  }' | jq -r '.sessionId')
+
+# 2. Navigate (watch it happen slowly)
+curl -X POST http://localhost:3000/api/session/$SESSION_ID/goto \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://www.google.com"}'
+
+# 3. Type (watch each character)
+curl -X POST http://localhost:3000/api/session/$SESSION_ID/type \
+  -H "Content-Type: application/json" \
+  -d '{"selector": "textarea[name=\"q\"]", "text": "test query"}'
+
+# 4. Click (watch the click happen)
+curl -X POST http://localhost:3000/api/session/$SESSION_ID/click \
+  -H "Content-Type: application/json" \
+  -d '{"selector": "input[name=\"btnK\"]"}'
+
+# 5. Check DevTools Console for any errors
+# 6. Check DevTools Network tab for requests
+```
+
+See [DEBUGGING.md](DEBUGGING.md) for comprehensive debugging guide.
 
 ## Proxy Configuration
 

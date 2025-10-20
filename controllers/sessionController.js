@@ -50,15 +50,22 @@ startCleanupWorker();
 
 // Create new session
 const createSession = async (req, res) => {
+    // Use environment variables for defaults in development
+    const defaultHeadless = process.env.DEFAULT_HEADLESS === 'false' ? false : true;
+    const defaultSlowMo = parseInt(process.env.DEFAULT_SLOWMO || '0', 10);
+    const defaultDevtools = process.env.DEFAULT_DEVTOOLS === 'true' ? true : false;
+
     const { 
-        headless = true, 
+        headless = defaultHeadless, 
         width = 1920, 
         height = 1080,
         userAgent,
         headers = {},
         userDataDir,
         locale = 'en-US',
-        proxy
+        proxy,
+        slowMo = defaultSlowMo,
+        devtools = defaultDevtools
     } = req.body;
 
     try {
@@ -68,8 +75,25 @@ const createSession = async (req, res) => {
         const launchOptions = {
             headless: headless ? 'new' : false,
             args: [...BROWSER_ARGS],
-            defaultViewport: { width, height }
+            defaultViewport: { width, height },
+            slowMo: slowMo, // Slow down operations for debugging
+            devtools: devtools // Auto-open DevTools
         };
+
+        // For non-headless mode (visible browser), optimize args for visibility
+        if (!headless) {
+            // Remove args that are only needed for headless mode
+            launchOptions.args = launchOptions.args.filter(arg => 
+                !arg.includes('--disable-gpu') && 
+                !arg.includes('--no-zygote')
+            );
+            
+            // Add args for better visibility in development
+            launchOptions.args.push(
+                '--start-maximized',
+                '--disable-blink-features=AutomationControlled'
+            );
+        }
 
         // Add proxy configuration if specified
         if (proxy) {

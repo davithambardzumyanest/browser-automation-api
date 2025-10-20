@@ -10,6 +10,29 @@ Content-Type: application/json
   "height": 1080
 }
 
+### 1a. Create Session (Development/Debugging Mode)
+POST http://localhost:3000/api/session/create
+Content-Type: application/json
+
+{
+  "headless": false,
+  "slowMo": 250,
+  "devtools": true,
+  "width": 1920,
+  "height": 1080
+}
+
+### 1b. Create Session (Slow Motion - Watch Operations)
+POST http://localhost:3000/api/session/create
+Content-Type: application/json
+
+{
+  "headless": false,
+  "slowMo": 500,
+  "width": 1920,
+  "height": 1080
+}
+
 ### 2. Create Session (Custom Headers for Google)
 POST http://localhost:3000/api/session/create
 Content-Type: application/json
