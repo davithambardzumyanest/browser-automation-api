@@ -5,6 +5,9 @@ const browserController = require('../controllers/browserController');
 // Screenshot endpoint
 router.post('/screenshot', browserController.takeScreenshot);
 
+// Debug screenshot endpoint (returns screenshot + debug info)
+router.post('/debug-screenshot', browserController.debugScreenshot);
+
 // Navigation endpoint
 router.post('/navigate', browserController.navigate);
 

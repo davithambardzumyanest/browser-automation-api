@@ -5,6 +5,7 @@ const cors = require('cors');
 const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
 const browserRoutes = require('./routes/browserRoutes');
+const sessionRoutes = require('./routes/sessionRoutes');
 const { getBrowser, closeBrowser } = require('./controllers/browserController');
 
 const app = express();
@@ -49,6 +50,7 @@ app.get('/health', (req, res) => {
 
 // API routes
 app.use('/api', browserRoutes);
+app.use('/api/session', sessionRoutes);
 
 // 404 handler
 app.use((req, res) => {

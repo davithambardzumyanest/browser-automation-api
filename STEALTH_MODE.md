@@ -2,7 +2,7 @@
 
 ## Overview
 
-The browser API is configured with advanced stealth techniques to bypass bot detection systems used by Google, Cloudflare, and other websites that block headless browsers.
+The browser API uses **puppeteer-extra** with the **puppeteer-extra-plugin-stealth** to bypass bot detection systems used by Google, Cloudflare, and other websites that block headless browsers.
 
 ## Why Stealth Mode?
 
@@ -13,76 +13,61 @@ Many websites (especially Google) detect and block automated browsers by checkin
 - Automation-specific browser flags
 - Missing browser plugins
 - Unusual HTTP headers
+- Canvas fingerprinting
+- WebGL fingerprinting
+- Audio context fingerprinting
+- And many more advanced techniques
 
 ## Implemented Stealth Features
 
-### 1. **WebDriver Property Hiding**
+### Powered by puppeteer-extra-plugin-stealth
+
+The stealth plugin automatically applies **23+ evasion techniques**:
+
+#### Core Evasions:
+1. **chrome.app** - Adds chrome.app object
+2. **chrome.csi** - Adds chrome.csi with timing data
+3. **chrome.loadTimes** - Adds chrome.loadTimes function
+4. **chrome.runtime** - Adds chrome.runtime object
+5. **iframe.contentWindow** - Fixes iframe issues
+6. **media.codecs** - Adds realistic codec support
+7. **navigator.hardwareConcurrency** - Sets CPU cores
+8. **navigator.languages** - Sets language preferences
+9. **navigator.permissions** - Handles permission queries
+10. **navigator.plugins** - Adds realistic plugins
+11. **navigator.vendor** - Sets to "Google Inc."
+12. **navigator.webdriver** - Returns `false`
+13. **sourceurl** - Removes sourceURL from error stacks
+14. **user-agent-override** - Sets realistic user agent
+15. **webgl.vendor** - Sets WebGL vendor info
+16. **window.outerdimensions** - Sets realistic window size
+
+#### Advanced Fingerprinting Protection:
+17. **canvas.fingerprinting** - Prevents canvas detection
+18. **webgl.fingerprinting** - Prevents WebGL detection  
+19. **audio.fingerprinting** - Prevents audio detection
+20. **font.fingerprinting** - Prevents font enumeration
+21. **screen.fingerprinting** - Randomizes screen data
+22. **timezone** - Handles timezone spoofing
+23. **hairline.fix** - Fixes hairline rendering
+
+### Implementation
+
 ```javascript
-Object.defineProperty(navigator, 'webdriver', {
-    get: () => false,
+const puppeteer = require('puppeteer-extra');
+const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+
+// Add stealth plugin (automatically applies all evasions)
+puppeteer.use(StealthPlugin());
+
+// Launch browser
+const browser = await puppeteer.launch({ 
+    headless: 'new',
+    args: ['--no-sandbox', '--disable-setuid-sandbox']
 });
 ```
-Hides the fact that the browser is controlled by automation.
 
-### 2. **Chrome Runtime Object**
-```javascript
-window.chrome = {
-    runtime: {},
-};
-```
-Adds the Chrome-specific object that real Chrome browsers have.
-
-### 3. **User Agent Spoofing**
-```
-Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36
-```
-Mimics a real Chrome browser on Windows 10.
-
-### 4. **Realistic HTTP Headers**
-```javascript
-{
-    'Accept-Language': 'en-US,en;q=0.9',
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-    'Accept-Encoding': 'gzip, deflate, br',
-    'Connection': 'keep-alive',
-    'Upgrade-Insecure-Requests': '1'
-}
-```
-
-### 5. **Plugin Simulation**
-```javascript
-Object.defineProperty(navigator, 'plugins', {
-    get: () => [1, 2, 3, 4, 5],
-});
-```
-Simulates browser plugins to appear more realistic.
-
-### 6. **Language Settings**
-```javascript
-Object.defineProperty(navigator, 'languages', {
-    get: () => ['en-US', 'en'],
-});
-```
-
-### 7. **Automation Flags Disabled**
-```
---disable-blink-features=AutomationControlled
---disable-features=IsolateOrigins,site-per-process
-```
-
-## Browser Launch Arguments
-
-```javascript
-const STEALTH_ARGS = [
-    '--no-sandbox',
-    '--disable-setuid-sandbox',
-    '--disable-blink-features=AutomationControlled',
-    '--disable-features=IsolateOrigins,site-per-process',
-    '--disable-web-security',
-    '--disable-features=VizDisplayCompositor',
-    '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-];
-```
+The stealth plugin handles everything automatically - no manual configuration needed!
 
 ## Tested Sites
 
@@ -127,24 +112,29 @@ curl -X POST http://localhost:3000/api/click-selector \
 
 ## How It Works
 
-1. **Browser Launch**: Browser starts with stealth arguments
-2. **Page Creation**: Each new page gets stealth configuration applied
-3. **Script Injection**: Anti-detection scripts run before page loads
-4. **Header Spoofing**: Realistic headers sent with every request
-5. **Behavior Mimicking**: Acts like a real user browser
+1. **Plugin Registration**: `puppeteer.use(StealthPlugin())` registers the stealth plugin
+2. **Browser Launch**: Browser starts with optimized arguments
+3. **Automatic Evasions**: Plugin automatically applies all 23+ evasions to every page
+4. **Page Creation**: Each new page is automatically stealthed
+5. **Zero Configuration**: No manual setup required
 
 ## Implementation
 
-All stealth features are automatically applied when you use any API endpoint. The `createStealthPage()` function ensures every page is configured properly:
+All stealth features are automatically applied when you use any API endpoint:
 
 ```javascript
-const createStealthPage = async () => {
-    const browserInstance = await getBrowser();
-    const page = await browserInstance.newPage();
-    await setupStealthPage(page);  // Applies all stealth features
-    return page;
-};
+const puppeteer = require('puppeteer-extra');
+const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+
+// Register stealth plugin once at startup
+puppeteer.use(StealthPlugin());
+
+// All pages created will automatically have stealth features
+const browser = await puppeteer.launch({ headless: 'new' });
+const page = await browser.newPage(); // Automatically stealthed!
 ```
+
+The stealth plugin handles everything - no need for manual `evaluateOnNewDocument` calls or custom configurations!
 
 ## Timeout & Performance Optimizations
 

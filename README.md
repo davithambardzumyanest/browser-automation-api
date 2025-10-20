@@ -14,12 +14,28 @@ A RESTful API built with Express.js and Puppeteer for taking screenshots of web 
 - 🏥 Health check endpoint
 - 🥷 **Stealth mode to bypass bot detection** (works with Google, etc.)
 - 🤖 Anti-detection measures (user agent spoofing, webdriver hiding)
+- 🎯 **Session-based API** - Persistent browser sessions with custom headers
+- ⏰ **Auto cleanup** - Sessions automatically close after 10 minutes of inactivity
+- 🍪 **Cookie persistence** - Optional persistent storage for login states
 
 ## Installation
 
 ```bash
 npm install
 ```
+
+### Dependencies
+
+- **express** - Web framework
+- **puppeteer** - Headless Chrome automation
+- **puppeteer-extra** - Plugin framework for puppeteer
+- **puppeteer-extra-plugin-stealth** - Stealth plugin for bot detection bypass
+- **uuid** - Session ID generation
+- **helmet** - Security headers
+- **cors** - Cross-origin resource sharing
+- **morgan** - HTTP request logging
+- **express-rate-limit** - Rate limiting
+- **dotenv** - Environment variables
 
 ## Configuration
 
@@ -40,6 +56,22 @@ npm run dev
 ```bash
 npm start
 ```
+
+## API Types
+
+This API provides two ways to interact with browsers:
+
+### 1. **Regular API** - One-off operations
+Simple endpoints for quick tasks. Each request creates and closes a browser.
+
+### 2. **Session API** - Persistent browser sessions
+Create long-lived browser sessions for complex workflows. Perfect for:
+- Multi-step automation
+- Maintaining login state
+- Custom headers per session
+- Manual CAPTCHA solving
+
+See [SESSION_API.md](SESSION_API.md) for complete session documentation.
 
 ## API Endpoints
 
@@ -437,17 +469,30 @@ This will limit all `/api` endpoints to 100 requests per 15 minutes per IP addre
 
 ## Anti-Detection Features
 
-The browser is configured with stealth mode to bypass bot detection on sites like Google:
+The browser uses **puppeteer-extra** with the **stealth plugin** to bypass bot detection on sites like Google:
 
-- **User Agent Spoofing** - Mimics real Chrome browser
+### Powered by puppeteer-extra-plugin-stealth
+
+The stealth plugin automatically handles:
+
+- **User Agent Spoofing** - Mimics real Chrome 120 browser
 - **WebDriver Property Hidden** - `navigator.webdriver` returns `false`
 - **Chrome Runtime Object** - Adds `window.chrome` object
-- **Realistic Headers** - Accept-Language, Accept-Encoding, etc.
+- **Realistic HTTP Headers** - Complete set of Chrome headers including:
+  - Accept, Accept-Language, Accept-Encoding
+  - Sec-Fetch-Dest, Sec-Fetch-Mode, Sec-Fetch-Site
+  - sec-ch-ua (Client Hints)
+  - Referer (Google.com)
 - **Plugin Simulation** - Simulates browser plugins
 - **Language Settings** - Sets realistic language preferences
 - **Automation Flags Disabled** - Removes automation indicators
+- **Canvas Fingerprinting** - Prevents canvas-based detection
+- **WebGL Fingerprinting** - Prevents WebGL-based detection
+- **Audio Context** - Prevents audio fingerprinting
+- **Permissions** - Handles permission queries realistically
+- **And 20+ other evasions** - Comprehensive bot detection bypass
 
-This allows the API to work with Google Search, Google Forms, and other sites that typically block headless browsers.
+This allows the API to work seamlessly with Google Search, Google Forms, Cloudflare-protected sites, and other sites that typically block headless browsers.
 
 ## License
 

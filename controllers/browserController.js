@@ -1,18 +1,22 @@
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+const { chromium } = require('playwright');
+
+// Add stealth plugin
+puppeteer.use(StealthPlugin());
 
 // Browser instance pool
 let browser = null;
 
-// Stealth configuration to bypass bot detection
-const STEALTH_ARGS = [
+// Browser launch arguments
+const BROWSER_ARGS = [
     '--no-sandbox',
     '--disable-setuid-sandbox',
-    '--disable-blink-features=AutomationControlled',
-    '--disable-features=IsolateOrigins,site-per-process',
-    '--disable-web-security',
-    '--disable-features=VizDisplayCompositor',
-    '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    '--disable-dev-shm-usage',
+    '--disable-accelerated-2d-canvas',
+    '--no-first-run',
+    '--no-zygote',
+    '--disable-gpu'
 ];
 
 // Initialize browser with stealth mode
@@ -20,63 +24,10 @@ const initBrowser = async () => {
     if (!browser) {
         browser = await puppeteer.launch({ 
             headless: 'new',
-            args: STEALTH_ARGS
+            args: BROWSER_ARGS
         });
     }
     return browser;
-};
-
-// Configure page to avoid detection
-const setupStealthPage = async (page) => {
-    // Override the navigator.webdriver property
-    await page.evaluateOnNewDocument(() => {
-        Object.defineProperty(navigator, 'webdriver', {
-            get: () => false,
-        });
-    });
-
-    // Override permissions
-    await page.evaluateOnNewDocument(() => {
-        const originalQuery = window.navigator.permissions.query;
-        window.navigator.permissions.query = (parameters) => (
-            parameters.name === 'notifications' ?
-                Promise.resolve({ state: Notification.permission }) :
-                originalQuery(parameters)
-        );
-    });
-
-    // Override plugins to make it look real
-    await page.evaluateOnNewDocument(() => {
-        Object.defineProperty(navigator, 'plugins', {
-            get: () => [1, 2, 3, 4, 5],
-        });
-    });
-
-    // Override languages
-    await page.evaluateOnNewDocument(() => {
-        Object.defineProperty(navigator, 'languages', {
-            get: () => ['en-US', 'en'],
-        });
-    });
-
-    // Add Chrome object
-    await page.evaluateOnNewDocument(() => {
-        window.chrome = {
-            runtime: {},
-        };
-    });
-
-    // Set realistic user agent
-    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
-
-    // Set extra headers
-    await page.setExtraHTTPHeaders({
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Connection': 'keep-alive',
-        'Upgrade-Insecure-Requests': '1'
-    });
 };
 
 // Get browser instance
@@ -84,12 +35,34 @@ const getBrowser = async () => {
     return await initBrowser();
 };
 
-// Create a new page with stealth configuration
+// Create a new page (stealth plugin handles all anti-detection automatically)
 const createStealthPage = async () => {
     const browserInstance = await getBrowser();
     const page = await browserInstance.newPage();
-    await setupStealthPage(page);
     return page;
+};
+
+// Helper function to set realistic headers
+const setRealisticHeaders = async (page) => {
+    // Set realistic user agent
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+    
+    // Set realistic HTTP headers that Google expects
+    await page.setExtraHTTPHeaders({
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Sec-Fetch-User': '?1',
+        'Cache-Control': 'max-age=0',
+        'sec-ch-ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"Windows"'
+    });
 };
 
 // Helper function to wait (replaces deprecated page.waitForTimeout)
@@ -105,31 +78,49 @@ const closeBrowser = async () => {
 
 // Take screenshot
 const takeScreenshot = async (req, res) => {
+    const browser = await puppeteer.launch({
+        headless: false,
+        userDataDir: './profile', // persist cookies
+        defaultViewport: { width: 1280, height: 800 },
+    });
+    const page = await browser.newPage();
+    await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36');
+    await page.setExtraHTTPHeaders({ 'accept-language': 'hy-AM,hy;q=0.9,en-US;q=0.8' });
 
-    const browser = await puppeteer.launch({ headless: true });
-    const page2 = await browser.newPage();
+    await page.goto('https://share.google/s8CQCA4d2hBmLZBnS', { waitUntil: 'networkidle2', timeout: 45000 });
+    await page.screenshot({ path: 'before_challenge.png', fullPage: true });
 
-    await page2.goto('https://www.google.com');
-    const screenshotBuffer = await page2.screenshot({ fullPage: true });
+    // detect likely captcha/challenge
+    const isChallenge = await page.evaluate(() => {
+        if (document.querySelector('iframe[src*="recaptcha"], iframe[src*="gstatic.com/recaptcha"]')) return true;
+        const body = (document.body && document.body.innerText) || '';
+        return /I am not a robot|please verify|are you a human|verify/i.test(body);
+    });
 
-    // await page2.type('input[name="q"]', 'chatgpt');
-    // await page2.keyboard.press('Enter');
-    //
-    // await page2.waitForSelector('#search');
-    //
-    // const results = await page.evaluate(() => {
-    //     return Array.from(document.querySelectorAll('h3')).map(el => el.innerText);
-    // });
-    // const screenshotBuffer = await page2.screenshot({ fullPage });
+    if (isChallenge) {
+        console.log('Challenge detected. Please solve it in the opened browser. Waiting up to 5 minutes...');
+        try {
+            await page.waitForFunction(() => {
+                // return true when challenge text/iframe no longer present
+                if (document.querySelector('iframe[src*="recaptcha"], iframe[src*="gstatic.com/recaptcha"]')) return false;
+                const body = (document.body && document.body.innerText) || '';
+                return !/I am not a robot|please verify|are you a human|verify/i.test(body);
+            }, { timeout: 1000 * 60 * 5 });
+            console.log('Challenge cleared — continuing automation.');
+        } catch (e) {
+            console.warn('Timed out waiting for manual solve. Inspect the browser window.');
+            return; // stop here; do not auto-bypass
+        }
+    } else {
+        console.log('No interactive challenge detected; continuing.');
+    }
 
-    // console.log(results);
-    await browser.close();
-
-    res.set('Content-Type', 'image/png');
-    res.send(screenshotBuffer);
-    return
+    // Continue with the rest of your automation here
+    await page.screenshot({ path: 'after_solve.png', fullPage: true });
+    console.log('Current URL:', page.url());
+    return;
     const { url, fullPage = true, width = 1920, height = 1080, timeout = 90000 } = req.body;
-    
+
     if (!url) {
         return res.status(400).json({ error: 'URL is required' });
     }
@@ -140,39 +131,57 @@ const takeScreenshot = async (req, res) => {
         return res.status(400).json({ error: 'Invalid URL format' });
     }
 
-    let page;
     try {
         page = await createStealthPage();
+
+        // Set realistic headers for Google compatibility
+        await setRealisticHeaders(page);
         
         await page.setViewport({ width, height });
         
-        // Use domcontentloaded for faster response, especially for Google
+        // Try to navigate, but don't fail if timeout occurs
         try {
             await page.goto(url, { 
                 waitUntil: 'domcontentloaded',
-                timeout: timeout 
+                timeout: timeout,
+                referer: 'https://www.facebook.com/'
             });
-        } catch (err) {
-            // If domcontentloaded fails, try with load
-            await page.goto(url, { 
-                waitUntil: 'load',
-                timeout: timeout 
-            });
+        } catch (navError) {
+            // If navigation times out, log it but continue to take screenshot
+            console.log('Navigation timeout, but attempting screenshot anyway:', navError.message);
         }
         
-        // Wait a bit for dynamic content to render
-        await wait(2000);
+        // Wait for dynamic content to render
+        await wait(5000);
 
+        // Take screenshot of whatever has loaded
         const screenshotBuffer = await page.screenshot({ fullPage });
 
         res.set('Content-Type', 'image/png');
         res.send(screenshotBuffer);
     } catch (error) {
         console.error('Error taking screenshot:', error);
-        res.status(500).json({ 
-            error: 'Failed to take screenshot',
-            message: error.message 
-        });
+        
+        // Try to take a screenshot anyway before failing
+        if (page) {
+            try {
+                const emergencyScreenshot = await page.screenshot({ fullPage: false });
+                res.set('Content-Type', 'image/png');
+                res.send(emergencyScreenshot);
+                return;
+            } catch (screenshotError) {
+                // If screenshot also fails, return error
+                res.status(500).json({ 
+                    error: 'Failed to take screenshot',
+                    message: error.message 
+                });
+            }
+        } else {
+            res.status(500).json({ 
+                error: 'Failed to take screenshot',
+                message: error.message 
+            });
+        }
     } finally {
         if (page) await page.close();
     }
@@ -195,8 +204,9 @@ const navigate = async (req, res) => {
     let page;
     try {
         page = await createStealthPage();
+        await setRealisticHeaders(page);
         
-        await page.goto(url, { waitUntil, timeout });
+        await page.goto(url, { waitUntil, timeout })
         const pageTitle = await page.title();
         const pageUrl = page.url();
 
@@ -227,6 +237,7 @@ const clickByText = async (req, res) => {
     let page;
     try {
         page = await createStealthPage();
+        await setRealisticHeaders(page);
         
         await page.goto(url, { waitUntil: 'domcontentloaded', timeout });
         
@@ -283,6 +294,7 @@ const clickBySelector = async (req, res) => {
     let page;
     try {
         page = await createStealthPage();
+        await setRealisticHeaders(page);
         
         await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 90000 });
         await page.waitForSelector(selector, { timeout: 10000 });
@@ -418,6 +430,7 @@ const executeScript = async (req, res) => {
     let page;
     try {
         page = await createStealthPage();
+        await setRealisticHeaders(page);
         
         await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 90000 });
         
@@ -625,10 +638,112 @@ const typeText = async (req, res) => {
     }
 };
 
+// Debug screenshot - returns screenshot with debug info
+const debugScreenshot = async (req, res) => {
+    const { url, fullPage = true, width = 1920, height = 1080, timeout = 90000 } = req.body;
+    
+    if (!url) {
+        return res.status(400).json({ error: 'URL is required' });
+    }
+    
+    try {
+        new URL(url);
+    } catch (err) {
+        return res.status(400).json({ error: 'Invalid URL format' });
+    }
+
+    let page;
+    const debugInfo = {
+        url,
+        timestamp: new Date().toISOString(),
+        navigationSuccess: false,
+        navigationError: null,
+        pageTitle: null,
+        pageUrl: null,
+        screenshotTaken: false,
+        contentLoaded: false
+    };
+
+    try {
+        page = await createStealthPage();
+        await setRealisticHeaders(page);
+        await page.setViewport({ width, height });
+        
+        // Try to navigate
+        try {
+            await page.goto(url, { 
+                waitUntil: 'domcontentloaded',
+                timeout: timeout,
+                referer: 'https://www.google.com/'
+            });
+            debugInfo.navigationSuccess = true;
+            debugInfo.contentLoaded = true;
+        } catch (navError) {
+            debugInfo.navigationError = navError.message;
+            console.log('Navigation error:', navError.message);
+        }
+        
+        await wait(2000);
+        
+        // Get page info
+        try {
+            debugInfo.pageTitle = await page.title();
+            debugInfo.pageUrl = page.url();
+        } catch (e) {
+            console.log('Could not get page info:', e.message);
+        }
+
+        // Take screenshot
+        const screenshotBuffer = await page.screenshot({ fullPage });
+        debugInfo.screenshotTaken = true;
+        
+        // Return JSON with base64 screenshot and debug info
+        res.json({
+            success: true,
+            debug: debugInfo,
+            screenshot: screenshotBuffer.toString('base64')
+        });
+    } catch (error) {
+        console.error('Error in debug screenshot:', error);
+        
+        // Try emergency screenshot
+        if (page) {
+            try {
+                const emergencyScreenshot = await page.screenshot({ fullPage: false });
+                debugInfo.screenshotTaken = true;
+                debugInfo.emergency = true;
+                
+                res.json({
+                    success: false,
+                    debug: debugInfo,
+                    screenshot: emergencyScreenshot.toString('base64'),
+                    error: error.message
+                });
+                return;
+            } catch (screenshotError) {
+                res.status(500).json({ 
+                    error: 'Failed to take screenshot',
+                    message: error.message,
+                    debug: debugInfo
+                });
+            }
+        } else {
+            res.status(500).json({ 
+                error: 'Failed to take screenshot',
+                message: error.message,
+                debug: debugInfo
+            });
+        }
+    } finally {
+        if (page) await page.close();
+    }
+};
+
 module.exports = {
     getBrowser,
     closeBrowser,
     takeScreenshot,
+    debugScreenshot,
     navigate,
     clickByText,
     clickBySelector,

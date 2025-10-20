@@ -2,7 +2,13 @@
 
 ## Overview
 
-Google has sophisticated bot detection, but this API is configured to bypass it. Here are the best practices for working with Google services.
+Google has sophisticated bot detection, but this API is configured to bypass it with:
+- **puppeteer-extra-plugin-stealth** - 23+ automatic evasions
+- **Realistic HTTP Headers** - Complete Chrome header set including Sec-Fetch and Client Hints
+- **User Agent Spoofing** - Chrome 120 on Windows 10
+- **Referer Header** - Set to Google.com for authenticity
+
+Here are the best practices for working with Google services.
 
 ## Common Issues & Solutions
 
