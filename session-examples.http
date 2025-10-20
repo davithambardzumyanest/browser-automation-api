@@ -52,6 +52,54 @@ Content-Type: application/json
   "height": 800
 }
 
+### 5. Create Session (With HTTP Proxy)
+POST http://localhost:3000/api/session/create
+Content-Type: application/json
+
+{
+  "headless": true,
+  "proxy": "http://proxy.example.com:8080"
+}
+
+### 6. Create Session (With Authenticated Proxy)
+POST http://localhost:3000/api/session/create
+Content-Type: application/json
+
+{
+  "headless": true,
+  "proxy": {
+    "server": "http://proxy.example.com:8080",
+    "username": "proxyuser",
+    "password": "proxypass"
+  }
+}
+
+### 7. Create Session (SOCKS5 Proxy)
+POST http://localhost:3000/api/session/create
+Content-Type: application/json
+
+{
+  "headless": true,
+  "proxy": "socks5://127.0.0.1:1080"
+}
+
+### 8. Create Session (Residential Proxy + Custom Headers)
+POST http://localhost:3000/api/session/create
+Content-Type: application/json
+
+{
+  "headless": true,
+  "proxy": {
+    "server": "http://residential-proxy.com:8080",
+    "username": "customer-user",
+    "password": "customer-pass"
+  },
+  "locale": "en-US",
+  "headers": {
+    "Accept-Language": "en-US,en;q=0.9"
+  }
+}
+
 ### 5. List All Active Sessions
 GET http://localhost:3000/api/session/list
 

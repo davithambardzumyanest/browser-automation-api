@@ -99,7 +99,6 @@ const createSession = async (req, res) => {
                 password: proxy.password
             });
         }
-        const page = await browser.newPage();
 
         // Set custom user agent or default
         const finalUserAgent = userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
@@ -138,7 +137,8 @@ const createSession = async (req, res) => {
                 height,
                 userAgent: finalUserAgent,
                 headers: finalHeaders,
-                locale
+                locale,
+                proxy: proxy ? (typeof proxy === 'string' ? proxy : proxy.server) : null
             }
         });
 

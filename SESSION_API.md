@@ -54,7 +54,12 @@ Creates a new browser session with custom configuration.
     "Referer": "https://www.google.com/"
   },
   "locale": "en-US",
-  "userDataDir": true
+  "userDataDir": true,
+  "proxy": {
+    "server": "http://proxy.example.com:8080",
+    "username": "user",
+    "password": "pass"
+  }
 }
 ```
 
@@ -66,6 +71,7 @@ Creates a new browser session with custom configuration.
 - `headers` (object, optional) - Custom HTTP headers
 - `locale` (string, default: "en-US") - Browser locale
 - `userDataDir` (boolean, optional) - Enable persistent cookie storage
+- `proxy` (string|object, optional) - Proxy configuration
 
 **Response:**
 ```json
@@ -303,6 +309,118 @@ Get page content (HTML or text).
   "title": "Google",
   "content": "..."
 }
+```
+
+## Proxy Configuration
+
+The Session API supports proxy configuration for routing browser traffic through proxy servers.
+
+### Proxy Formats
+
+#### 1. Simple String (No Authentication)
+```json
+{
+  "proxy": "http://proxy.example.com:8080"
+}
+```
+
+#### 2. Object with Authentication
+```json
+{
+  "proxy": {
+    "server": "http://proxy.example.com:8080",
+    "username": "proxyuser",
+    "password": "proxypass"
+  }
+}
+```
+
+#### 3. SOCKS Proxy
+```json
+{
+  "proxy": "socks5://proxy.example.com:1080"
+}
+```
+
+### Proxy Examples
+
+#### HTTP Proxy
+```bash
+curl -X POST http://localhost:3000/api/session/create \
+  -H "Content-Type: application/json" \
+  -d '{
+    "headless": true,
+    "proxy": "http://proxy.example.com:8080"
+  }'
+```
+
+#### Authenticated Proxy
+```bash
+curl -X POST http://localhost:3000/api/session/create \
+  -H "Content-Type: application/json" \
+  -d '{
+    "headless": true,
+    "proxy": {
+      "server": "http://proxy.example.com:8080",
+      "username": "user",
+      "password": "pass"
+    }
+  }'
+```
+
+#### SOCKS5 Proxy
+```bash
+curl -X POST http://localhost:3000/api/session/create \
+  -H "Content-Type: application/json" \
+  -d '{
+    "headless": true,
+    "proxy": "socks5://127.0.0.1:1080"
+  }'
+```
+
+#### Residential Proxy with Custom Headers
+```bash
+curl -X POST http://localhost:3000/api/session/create \
+  -H "Content-Type: application/json" \
+  -d '{
+    "headless": true,
+    "proxy": {
+      "server": "http://residential-proxy.com:8080",
+      "username": "customer-user",
+      "password": "customer-pass"
+    },
+    "locale": "en-US",
+    "headers": {
+      "Accept-Language": "en-US,en;q=0.9"
+    }
+  }'
+```
+
+### Proxy Use Cases
+
+1. **IP Rotation** - Use different proxies for different sessions
+2. **Geo-targeting** - Access region-specific content
+3. **Rate Limiting Bypass** - Distribute requests across IPs
+4. **Privacy** - Hide your server's IP address
+5. **Testing** - Test how sites behave from different locations
+
+### Testing Proxy Connection
+
+```bash
+# Create session with proxy
+SESSION_ID=$(curl -X POST http://localhost:3000/api/session/create \
+  -H "Content-Type: application/json" \
+  -d '{"proxy": "http://proxy.example.com:8080"}' \
+  | jq -r '.sessionId')
+
+# Check IP address
+curl -X POST http://localhost:3000/api/session/$SESSION_ID/goto \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://api.ipify.org?format=json"}'
+
+curl -X POST http://localhost:3000/api/session/$SESSION_ID/execute \
+  -H "Content-Type: application/json" \
+  -d '{"script": "return document.body.textContent"}'
 ```
 
 ## Usage Examples
