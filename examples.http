@@ -1,0 +1,167 @@
+### Health Check
+GET http://localhost:3000/health
+
+### 1. Take Screenshot
+POST http://localhost:3000/api/screenshot
+Content-Type: application/json
+
+{
+  "url": "https://example.com",
+  "fullPage": true,
+  "width": 1920,
+  "height": 1080
+}
+
+### 2. Navigate to URL
+POST http://localhost:3000/api/navigate
+Content-Type: application/json
+
+{
+  "url": "https://example.com",
+  "waitUntil": "networkidle2"
+}
+
+### 3. Click Element by Text
+POST http://localhost:3000/api/click-text
+Content-Type: application/json
+
+{
+  "url": "https://example.com",
+  "text": "More information",
+  "elementType": "a"
+}
+
+### 4. Click Element by Selector
+POST http://localhost:3000/api/click-selector
+Content-Type: application/json
+
+{
+  "url": "https://example.com",
+  "selector": "a[href]",
+  "waitForNavigation": false
+}
+
+### 5. Fill Form
+POST http://localhost:3000/api/fill-form
+Content-Type: application/json
+
+{
+  "url": "https://www.google.com",
+  "fields": [
+    {
+      "selector": "textarea[name='q']",
+      "value": "puppeteer automation",
+      "type": "text"
+    }
+  ]
+}
+
+### 6. Get Page Content
+POST http://localhost:3000/api/content
+Content-Type: application/json
+
+{
+  "url": "https://example.com",
+  "selector": "h1"
+}
+
+### 7. Execute Custom Script
+POST http://localhost:3000/api/execute-script
+Content-Type: application/json
+
+{
+  "url": "https://example.com",
+  "script": "return { title: document.title, links: document.querySelectorAll('a').length }"
+}
+
+### 8. Wait for Element
+POST http://localhost:3000/api/wait-element
+Content-Type: application/json
+
+{
+  "url": "https://example.com",
+  "selector": "h1",
+  "timeout": 30000
+}
+
+### 9. Get Element Attributes
+POST http://localhost:3000/api/element-attributes
+Content-Type: application/json
+
+{
+  "url": "https://example.com",
+  "selector": "h1"
+}
+
+### 10. Scroll Page
+POST http://localhost:3000/api/scroll
+Content-Type: application/json
+
+{
+  "url": "https://example.com",
+  "direction": "bottom"
+}
+
+### 11. Generate PDF
+POST http://localhost:3000/api/pdf
+Content-Type: application/json
+
+{
+  "url": "https://example.com",
+  "format": "A4",
+  "landscape": false
+}
+
+### 12. Type Text
+POST http://localhost:3000/api/type
+Content-Type: application/json
+
+{
+  "url": "https://www.google.com",
+  "selector": "textarea[name='q']",
+  "text": "hello world",
+  "delay": 100
+}
+
+### ===== GOOGLE EXAMPLES (Stealth Mode) =====
+
+### Google Search - Type Query
+POST http://localhost:3000/api/type
+Content-Type: application/json
+
+{
+  "url": "https://www.google.com",
+  "selector": "textarea[name='q']",
+  "text": "puppeteer automation",
+  "delay": 100
+}
+
+### Google Search - Get Results
+POST http://localhost:3000/api/execute-script
+Content-Type: application/json
+
+{
+  "url": "https://www.google.com/search?q=puppeteer",
+  "script": "return Array.from(document.querySelectorAll('h3')).map(h => h.textContent).filter(t => t)"
+}
+
+### Google - Take Screenshot
+POST http://localhost:3000/api/screenshot
+Content-Type: application/json
+
+{
+  "url": "https://www.google.com",
+  "fullPage": false,
+  "width": 1920,
+  "height": 1080,
+  "timeout": 120000
+}
+
+### Google - Navigate and Get Title
+POST http://localhost:3000/api/navigate
+Content-Type: application/json
+
+{
+  "url": "https://www.google.com",
+  "waitUntil": "networkidle2"
+}
