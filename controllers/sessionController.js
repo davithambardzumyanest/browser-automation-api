@@ -55,9 +55,9 @@ const createSession = async (req, res) => {
     const defaultSlowMo = parseInt(process.env.DEFAULT_SLOWMO || '0', 10);
     const defaultDevtools = process.env.DEFAULT_DEVTOOLS === 'true' ? true : false;
 
-    const { 
-        headless = defaultHeadless, 
-        width = 1920, 
+    const {
+        headless = defaultHeadless,
+        width = 1920,
         height = 1080,
         userAgent,
         headers = {},
@@ -70,7 +70,7 @@ const createSession = async (req, res) => {
 
     try {
         const sessionId = uuidv4();
-        
+
         // Launch browser with custom options
         const launchOptions = {
             headless: headless ? 'new' : false,
@@ -83,11 +83,11 @@ const createSession = async (req, res) => {
         // For non-headless mode (visible browser), optimize args for visibility
         if (!headless) {
             // Remove args that are only needed for headless mode
-            launchOptions.args = launchOptions.args.filter(arg => 
-                !arg.includes('--disable-gpu') && 
+            launchOptions.args = launchOptions.args.filter(arg =>
+                !arg.includes('--disable-gpu') &&
                 !arg.includes('--no-zygote')
             );
-            
+
             // Add args for better visibility in development
             launchOptions.args.push(
                 '--start-maximized',
@@ -124,9 +124,9 @@ const createSession = async (req, res) => {
                     username: proxy.username,
                     password: proxy.password
                 });
-                
+
                 console.log('Proxy authentication set successfully');
-                
+
                 // Set up a handler for authentication dialogs
                 page.on('dialog', async dialog => {
                     console.log('Authentication dialog detected, attempting to authenticate...');
@@ -141,6 +141,19 @@ const createSession = async (req, res) => {
                         await dialog.dismiss();
                     }
                 });
+
+                // Test the proxy connection with a simple navigation
+                try {
+                    console.log('Testing proxy connection...');
+                    await page.goto('https://whatismyipaddress.com/', {
+                        waitUntil: 'domcontentloaded',
+                        timeout: 30000
+                    });
+                    console.log('Proxy connection test completed');
+                } catch (testError) {
+                    console.warn('Proxy test navigation failed, but continuing:', testError.message);
+                }
+
             } catch (error) {
                 console.error('Error setting up proxy authentication:', error.message);
                 // Continue with session creation even if proxy setup fails
@@ -167,7 +180,7 @@ const createSession = async (req, res) => {
             'sec-ch-ua-mobile': '?0',
             'sec-ch-ua-platform': '"Windows"'
         };
-        
+
         // Add device metrics for more realistic behavior
         await page.setViewport({
             width: 1920,
@@ -548,6 +561,169 @@ const closeAllSessions = async (req, res) => {
     });
 };
 
+// Function to generate random delay
+const randomDelay = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
+
+// Function to simulate human-like mouse movement
+async function moveMouse(page, x, y) {
+    await page.mouse.move(x, y, { steps: 20 });
+    await wait(randomDelay(100, 300));
+}
+
+// Function to simulate human-like typing
+async function humanType(page, selector, text) {
+    await page.focus(selector);
+    for (let char of text) {
+        await page.type(selector, char, { delay: randomDelay(30, 150) });
+        // Randomly take longer breaks between some characters
+        if (Math.random() > 0.9) {
+            await wait(randomDelay(100, 500));
+        }
+    }
+}
+
+// Function to simulate random scrolling
+async function randomScroll(page) {
+    const scrollAmount = Math.floor(Math.random() * 500) + 100;
+    await page.evaluate((scrollAmount) => {
+        window.scrollBy(0, scrollAmount);
+    }, scrollAmount);
+    await wait(randomDelay(300, 1000));
+}
+
+// Function to simulate random mouse movements
+async function randomMouseMovements(page) {
+    const viewport = page.viewport();
+    const x = Math.floor(Math.random() * viewport.width);
+    const y = Math.floor(Math.random() * viewport.height);
+    await moveMouse(page, x, y);
+}
+
+// Function to simulate random clicks on interactive elements
+async function randomClicks(page) {
+    const clickableElements = await page.$$('a, button, [role="button"], [onclick]');
+    if (clickableElements.length > 0) {
+        const randomIndex = Math.floor(Math.random() * clickableElements.length);
+        try {
+            await clickableElements[randomIndex].click({ delay: randomDelay(50, 200) });
+            await wait(randomDelay(1000, 3000));
+            // Go back if we navigated
+            if (page.url() !== 'about:blank') {
+                await page.reload();
+                await wait(randomDelay(1000, 2000));
+            }
+        } catch (error) {
+            console.log(error);
+            console.log('Could not click element, continuing...');
+        }
+    }
+}
+
+// Function to simulate form filling
+async function fillRandomForms(page) {
+    const inputs = await page.$$('input[type="text"], input[type="email"], textarea');
+    for (const input of inputs) {
+        if (Math.random() > 0.7) { // 30% chance to fill each input
+            const inputType = await input.evaluate(el => el.type || 'text');
+            let value = '';
+            
+            switch(inputType) {
+                case 'email':
+                    value = `test${Math.floor(Math.random() * 1000)}@example.com`;
+                    break;
+                case 'text':
+                default:
+                    value = ['Hello', 'Test', 'Sample', 'Random', 'Text'][Math.floor(Math.random() * 5)];
+                    break;
+            }
+            
+            try {
+                await input.type(value, { delay: randomDelay(30, 150) });
+                await wait(randomDelay(500, 1500));
+            } catch (error) {
+                console.log('Could not type into input, continuing...');
+            }
+        }
+    }
+}
+
+// Main function to simulate user actions
+const simulateUserActions = async (req, res) => {
+    const { sessionId } = req.params;
+    const { durationMinutes = 5 } = req.body;
+    
+    if (!sessions.has(sessionId)) {
+        return res.status(404).json({ error: 'Session not found' });
+    }
+    
+    const session = sessions.get(sessionId);
+    const { browser, page } = session;
+    
+    if (!browser || !page) {
+        return res.status(400).json({ error: 'Browser or page not available' });
+    }
+    
+    try {
+        const endTime = Date.now() + (durationMinutes * 60 * 1000);
+        
+        // Start the simulation in the background
+        (async () => {
+            console.log(`Starting user simulation for session ${sessionId} for ${durationMinutes} minutes`);
+            
+            while (Date.now() < endTime) {
+                try {
+                    // Randomly choose an action
+                    const action = Math.floor(Math.random() * 5);
+                    
+                    switch(action) {
+                        case 0:
+                            await randomScroll(page);
+                            break;
+                        case 1:
+                            await randomMouseMovements(page);
+                            break;
+                        case 2:
+                            await randomClicks(page);
+                            break;
+                        case 3:
+                            await fillRandomForms(page);
+                            break;
+                        case 4:
+                            // Random refresh (10% chance)
+                            if (Math.random() < 0.1) {
+                                await page.reload({ waitUntil: 'networkidle0' });
+                            await wait(randomDelay(2000, 5000));
+                            }
+                            break;
+                    }
+                    
+                    // Random delay between actions
+                    await wait(randomDelay(2000, 10000));
+                    
+                } catch (error) {
+                    console.error('Error during simulation:', error.message);
+                    // Continue with the next action
+                    await wait(1000);
+                }
+            }
+            
+            console.log(`User simulation completed for session ${sessionId}`);
+        })();
+        
+        res.json({ 
+            success: true, 
+            message: `User simulation started for ${durationMinutes} minutes` 
+        });
+        
+    } catch (error) {
+        console.error('Error starting user simulation:', error);
+        res.status(500).json({ 
+            error: 'Failed to start user simulation',
+            details: error.message 
+        });
+    }
+};
+
 module.exports = {
     createSession,
     getSession,
@@ -559,5 +735,6 @@ module.exports = {
     typeSession,
     getContentSession,
     closeSessionEndpoint,
-    closeAllSessions
+    closeAllSessions,
+    simulateUserActions
 };

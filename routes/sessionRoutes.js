@@ -16,5 +16,6 @@ router.post('/:sessionId/execute', sessionController.executeScriptSession);
 router.post('/:sessionId/click', sessionController.clickSession);
 router.post('/:sessionId/type', sessionController.typeSession);
 router.post('/:sessionId/content', sessionController.getContentSession);
+router.post('/:sessionId/simulate-actions', sessionController.simulateUserActions);
 
 module.exports = router;
