@@ -141,19 +141,6 @@ const createSession = async (req, res) => {
                         await dialog.dismiss();
                     }
                 });
-                
-                // Test the proxy connection with a simple navigation
-                try {
-                    console.log('Testing proxy connection...');
-                    await page.goto('https://whatismyipaddress.com/', {
-                        waitUntil: 'domcontentloaded',
-                        timeout: 30000
-                    });
-                    console.log('Proxy connection test completed');
-                } catch (testError) {
-                    console.warn('Proxy test navigation failed, but continuing:', testError.message);
-                }
-                
             } catch (error) {
                 console.error('Error setting up proxy authentication:', error.message);
                 // Continue with session creation even if proxy setup fails
