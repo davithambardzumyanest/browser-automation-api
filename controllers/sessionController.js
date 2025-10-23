@@ -118,10 +118,46 @@ const createSession = async (req, res) => {
 
         // Set proxy authentication if provided
         if (proxy && typeof proxy === 'object' && proxy.username && proxy.password) {
-            await page.authenticate({
-                username: proxy.username,
-                password: proxy.password
-            });
+            try {
+                // First try to authenticate using page.authenticate
+                await page.authenticate({
+                    username: proxy.username,
+                    password: proxy.password
+                });
+                
+                console.log('Proxy authentication set successfully');
+                
+                // Set up a handler for authentication dialogs
+                page.on('dialog', async dialog => {
+                    console.log('Authentication dialog detected, attempting to authenticate...');
+                    try {
+                        await dialog.authenticate({
+                            username: proxy.username,
+                            password: proxy.password
+                        });
+                        console.log('Dialog authentication successful');
+                    } catch (authError) {
+                        console.error('Dialog authentication failed:', authError.message);
+                        await dialog.dismiss();
+                    }
+                });
+                
+                // Test the proxy connection with a simple navigation
+                try {
+                    console.log('Testing proxy connection...');
+                    await page.goto('https://whatismyipaddress.com/', {
+                        waitUntil: 'domcontentloaded',
+                        timeout: 30000
+                    });
+                    console.log('Proxy connection test completed');
+                } catch (testError) {
+                    console.warn('Proxy test navigation failed, but continuing:', testError.message);
+                }
+                
+            } catch (error) {
+                console.error('Error setting up proxy authentication:', error.message);
+                // Continue with session creation even if proxy setup fails
+            }
         }
 
         // Set custom user agent or default
@@ -144,6 +180,16 @@ const createSession = async (req, res) => {
             'sec-ch-ua-mobile': '?0',
             'sec-ch-ua-platform': '"Windows"'
         };
+        
+        // Add device metrics for more realistic behavior
+        await page.setViewport({
+            width: 1920,
+            height: 1080,
+            deviceScaleFactor: 1,
+            isMobile: false,
+            hasTouch: false,
+            isLandscape: true
+        });
 
         // Merge custom headers with defaults
         const finalHeaders = { ...defaultHeaders, ...headers };
