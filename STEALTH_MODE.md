@@ -18,6 +18,124 @@ Many websites (especially Google) detect and block automated browsers by checkin
 - Audio context fingerprinting
 - And many more advanced techniques
 
+## API Reference
+
+### Session Management
+
+#### Create New Session
+```http
+POST /api/sessions/create
+```
+Creates a new browser session with stealth mode enabled.
+
+#### List Active Sessions
+```http
+GET /api/sessions/list
+```
+Returns a list of all active browser sessions.
+
+#### Get Session Info
+```http
+GET /api/sessions/:sessionId
+```
+Retrieves information about a specific session.
+
+#### Close Session
+```http
+DELETE /api/sessions/:sessionId
+```
+Closes the specified browser session.
+
+#### Close All Sessions
+```http
+DELETE /api/sessions
+```
+Closes all active browser sessions.
+
+### Browser Operations
+
+#### Navigate to URL
+```http
+POST /api/sessions/:sessionId/goto
+```
+Navigates the browser to the specified URL.
+
+#### Take Screenshot
+```http
+POST /api/sessions/:sessionId/screenshot
+```
+Takes a screenshot of the current page.
+
+#### Execute Script
+```http
+POST /api/sessions/:sessionId/execute
+```
+Executes JavaScript in the browser context.
+
+#### Click Element
+```http
+POST /api/sessions/:sessionId/click
+```
+Clicks on an element matching the specified selector.
+
+#### Type Text
+```http
+POST /api/sessions/:sessionId/type
+```
+Types text into the specified input field.
+
+#### Get Page Content
+```http
+POST /api/sessions/:sessionId/content
+```
+Retrieves the HTML content of the current page.
+
+#### Simulate User Actions
+```http
+POST /api/sessions/:sessionId/simulate-actions
+```
+Simulates realistic user interactions with the page.
+
+#### Validate Google
+```http
+POST /api/sessions/:sessionId/validate-google
+```
+Handles Google validation challenges.
+
+## Error Handling
+
+The API includes robust error handling to ensure the application remains stable even when errors occur:
+
+### Common Error Responses
+
+#### 400 Bad Request
+- Invalid request parameters
+- Missing required fields
+- Invalid session ID format
+
+#### 404 Not Found
+- Session not found
+- Page element not found
+
+#### 500 Internal Server Error
+- Browser crashed or became unresponsive
+- Navigation timeout
+- JavaScript execution errors
+
+### Error Response Format
+```json
+{
+  "success": false,
+  "error": "Error message",
+  "stack": "Error stack trace (in development only)"
+}
+```
+
+### Automatic Recovery
+- Failed browser operations automatically retry up to 3 times
+- Crashed browser sessions are automatically cleaned up
+- Orphaned processes are terminated on application restart
+
 ## Implemented Stealth Features
 
 ### Powered by puppeteer-extra-plugin-stealth

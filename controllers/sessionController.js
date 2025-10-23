@@ -20,8 +20,61 @@ const BROWSER_ARGS = [
     '--disable-accelerated-2d-canvas',
     '--no-first-run',
     '--no-zygote',
-    '--disable-gpu'
+    '--disable-gpu',
+    '--disable-blink-features=AutomationControlled',
+    '--disable-features=IsolateOrigins,site-per-process',
+    '--disable-web-security',
+    '--disable-infobars',
+    '--window-size=1920,1080',
+    '--start-maximized',
+    '--disable-notifications',
+    '--disable-popup-blocking',
+    '--disable-translate',
+    '--disable-extensions',
+    '--disable-default-apps',
+    '--mute-audio',
+    '--safebrowsing-disable-auto-update',
+    '--disable-sync',
+    '--metrics-recording-only',
+    '--disable-hang-monitor',
+    '--disable-prompt-on-repost',
+    '--disable-client-side-phishing-detection',
+    '--password-store=basic',
+    '--use-mock-keychain',
+    '--disable-component-update',
+    '--disable-domain-reliability',
+    '--disable-background-timer-throttling',
+    '--disable-backgrounding-occluded-windows',
+    '--disable-renderer-backgrounding',
+    '--disable-back-forward-cache-for-cache-control-no-store',
+    '--disable-back-forward-cache',
+    '--disable-breakpad',
+    '--disable-ipc-flooding-protection',
+    '--disable-remote-fonts',
+    '--disable-session-crashed-bubble',
+    '--force-color-profile=srgb',
+    '--enable-automation',
+    '--no-default-browser-check',
+    '--no-service-autorun',
+    '--deny-permission-prompts',
+    '--disable-search-geolocation-disclosure',
+    '--disable-features=site-per-process',
+    '--disable-blink-features',
+    '--disable-blink-features=AutomationControlled'
 ];
+
+// Common user agents for rotation
+const USER_AGENTS = [
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/118.0',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:109.0) Gecko/20100101 Firefox/118.0'
+];
+
+// Function to get a random user agent
+const getRandomUserAgent = () => {
+    return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+};
 
 // Helper function to wait
 const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -48,7 +101,11 @@ const startCleanupWorker = () => {
 // Start cleanup worker
 startCleanupWorker();
 
-// Create new session
+/**
+ * Create a new browser session with anti-detection measures
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ */
 const createSession = async (req, res) => {
     // Use environment variables for defaults in development
     const defaultHeadless = process.env.DEFAULT_HEADLESS === 'false' ? false : true;
@@ -59,13 +116,25 @@ const createSession = async (req, res) => {
         headless = defaultHeadless,
         width = 1920,
         height = 1080,
-        userAgent,
-        headers = {},
+        userAgent = getRandomUserAgent(),
+        headers = {
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'DNT': '1',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Cache-Control': 'max-age=0'
+        },
         userDataDir,
         locale = 'en-US',
         proxy,
         slowMo = defaultSlowMo,
-        devtools = defaultDevtools
+        devtools = defaultDevtools,
+        stealth = true
     } = req.body;
 
     try {
@@ -75,9 +144,21 @@ const createSession = async (req, res) => {
         const launchOptions = {
             headless: headless ? 'new' : false,
             args: [...BROWSER_ARGS],
-            defaultViewport: { width, height },
+            defaultViewport: { 
+                width, 
+                height,
+                deviceScaleFactor: 1,
+                isMobile: false,
+                hasTouch: false,
+                isLandscape: false
+            },
             slowMo: slowMo, // Slow down operations for debugging
-            devtools: devtools // Auto-open DevTools
+            devtools: devtools, // Auto-open DevTools
+            ignoreHTTPSErrors: true,
+            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
+            timeout: 60000, // 60 seconds timeout
+            dumpio: false,
+            ignoreDefaultArgs: ['--enable-automation']
         };
 
         // For non-headless mode (visible browser), optimize args for visibility
@@ -113,8 +194,96 @@ const createSession = async (req, res) => {
             launchOptions.userDataDir = `./sessions/${sessionId}`;
         }
 
+        // Launch browser and create page
         const browser = await puppeteer.launch(launchOptions);
         const page = await browser.newPage();
+
+        // Apply stealth mode if enabled
+        if (stealth) {
+            await page.evaluateOnNewDocument(() => {
+                // WebDriver detection
+                Object.defineProperty(navigator, 'webdriver', {
+                    get: () => false,
+                });
+
+                // Chrome object mocking
+                window.chrome = window.chrome || {};
+                window.chrome.runtime = {};
+                
+                // Plugins spoofing
+                Object.defineProperty(navigator, 'plugins', {
+                    get: () => [1, 2, 3, 4, 5], // Mock plugins array
+                });
+
+                // Languages spoofing
+                Object.defineProperty(navigator, 'languages', {
+                    get: () => ['en-US', 'en'],
+                    configurable: false,
+                    writable: false
+                });
+
+                // Permissions spoofing
+                const originalQuery = window.navigator.permissions.query;
+                window.navigator.permissions.query = (parameters) => (
+                    parameters.name === 'notifications' ?
+                        Promise.resolve({ state: 'denied' }) :
+                        originalQuery(parameters)
+                );
+
+                // WebGL vendor and renderer spoofing
+                const getParameter = WebGLRenderingContext.prototype.getParameter;
+                WebGLRenderingContext.prototype.getParameter = function(parameter) {
+                    // UNMASKED_VENDOR_WEBGL
+                    if (parameter === 37445) {
+                        return 'Google Inc. (NVIDIA)';
+                    }
+                    // UNMASKED_RENDERER_WEBGL
+                    if (parameter === 37446) {
+                        return 'ANGLE (NVIDIA, NVIDIA GeForce RTX 3080 Direct3D11 vs_5_0 ps_5_0, D3D11)';
+                    }
+                    return getParameter(parameter);
+                };
+
+                // Prevent detection of headless Chrome
+                Object.defineProperty(navigator, 'plugins', {
+                    get: () => [1, 2, 3, 4, 5],
+                });
+
+                // Override the languages property to prevent modification
+                const originalLanguages = Object.getOwnPropertyDescriptor(navigator, 'languages');
+                Object.defineProperty(navigator, 'languages', {
+                    ...originalLanguages,
+                    value: ['en-US', 'en'],
+                    configurable: false,
+                    writable: false
+                });
+
+                // Mock permissions
+                const originalPermissions = {
+                    query: window.navigator.permissions.query,
+                    request: window.navigator.permissions.request,
+                    revoke: window.navigator.permissions.revoke
+                };
+
+                window.navigator.permissions.query = (parameters) => {
+                    if (parameters.name === 'notifications') {
+                        return Promise.resolve({ state: 'denied' });
+                    }
+                    return originalPermissions.query(parameters);
+                };
+            });
+
+            // Set additional HTTP headers
+            await page.setExtraHTTPHeaders(headers);
+            
+            // Set viewport and other browser-like properties
+            await page.setViewport(launchOptions.defaultViewport);
+            await page.setBypassCSP(true);
+
+            // Disable timeout for page load
+            page.setDefaultNavigationTimeout(0);
+            page.setDefaultTimeout(60000);
+        }
 
         // Set proxy authentication if provided
         if (proxy && typeof proxy === 'object' && proxy.username && proxy.password) {
@@ -790,7 +959,12 @@ async function acceptGoogleCookies(page) {
         // Czech
         'Přijmout vše', 'Přijmout všechny',
         // Hungarian
-        'Elfogadom', 'Elfogad mindent',
+        'Elfogadom', 'Elfogad mindent', 'Elfogadás', 'Elfogad minden sütit', 
+        'Összes elfogadása', 'Elfogadom az összeset', 'Minden süti elfogadása',
+        'Elfogadom a sütiket', 'Összes elfogadása és továbblépés', 'Rendben',
+        'Elfogad', 'Elfogadok mindent', 'Minden süti elfogadva',
+        'Sütik elfogadása', 'Elfogadom a feltételeket', 'Elfogadás és tovább',
+        'Az',
         // Slovak
         'Prijať všetko', 'Súhlasím so všetkým',
         // Croatian/Serbian/Bosnian
