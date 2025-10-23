@@ -10,7 +10,7 @@ const sessions = new Map();
 
 // Session cleanup interval (check every minute)
 const CLEANUP_INTERVAL = 60000; // 1 minute
-const SESSION_TIMEOUT = 600000; // 10 minutes
+const SESSION_TIMEOUT = 3600000; // 60 minutes (1 hour)
 
 // Browser launch arguments
 const BROWSER_ARGS = [
@@ -279,7 +279,7 @@ const listSessions = (req, res) => {
 // Navigate to URL
 const navigateSession = async (req, res) => {
     const { sessionId } = req.params;
-    const { url, waitUntil = 'domcontentloaded', timeout = 90000, referer } = req.body;
+    const { url, waitUntil = 'domcontentloaded', timeout = 90000, referer, newTab = false } = req.body;
 
     if (!url) {
         return res.status(400).json({ error: 'URL is required' });
@@ -307,15 +307,53 @@ const navigateSession = async (req, res) => {
             options.referer = referer;
         }
 
-        await session.page.goto(url, options);
-        const pageTitle = await session.page.title();
-        const pageUrl = session.page.url();
+        let targetPage = session.page;
+        const browser = await targetPage.browser();
+        const pages = await browser.pages();
+        
+        // If newTab is true or no pages are open, create a new tab
+        if (newTab || pages.length === 0) {
+            targetPage = await browser.newPage();
+            await targetPage.setViewport({ width: 1366, height: 768 });
+        } else {
+            // Try to find an existing tab with the same URL
+            const targetUrl = new URL(url);
+            const matchingPage = pages.find(async (page) => {
+                try {
+                    const pageUrl = new URL(page.url());
+                    return pageUrl.hostname === targetUrl.hostname && 
+                           pageUrl.pathname === targetUrl.pathname;
+                } catch (e) {
+                    return false;
+                }
+            });
+            
+            if (matchingPage) {
+                targetPage = matchingPage;
+                await targetPage.bringToFront();
+            } else if (pages.length < 10) { // Limit to 10 tabs to prevent memory issues
+                targetPage = await browser.newPage();
+                await targetPage.setViewport({ width: 1366, height: 768 });
+            } else {
+                // If we have too many tabs, use the current page
+                targetPage = session.page;
+            }
+        }
+
+        // Update the session's page reference
+        session.page = targetPage;
+        
+        // Navigate to the URL
+        await targetPage.goto(url, options);
+        const pageTitle = await targetPage.title();
+        const pageUrl = targetPage.url();
 
         res.json({
             success: true,
             sessionId,
             title: pageTitle,
-            url: pageUrl
+            url: pageUrl,
+            tabCount: (await browser.pages()).length
         });
     } catch (error) {
         console.error('Error navigating:', error);
@@ -633,7 +671,7 @@ async function fillRandomForms(page) {
                     break;
                 case 'text':
                 default:
-                    value = ['Hello', 'Test', 'Sample', 'Random', 'Text'][Math.floor(Math.random() * 5)];
+                    value = ['Hello', 'BTC', 'Sample', 'News', ' ', ' ', ' ', ' ', 'Text' ,'a', 'b', 't', 'o', 'p', 'd'][Math.floor(Math.random() * 5)];
                     break;
             }
             
@@ -719,22 +757,166 @@ const simulateUserActions = async (req, res) => {
         console.error('Error starting user simulation:', error);
         res.status(500).json({ 
             error: 'Failed to start user simulation',
-            details: error.message 
+        });
+    }
+};
+
+// Helper function to accept Google cookies
+async function acceptGoogleCookies(page) {
+    // Common "Accept all" translations in various languages
+    const acceptButtonTexts = [
+        // English
+        'Accept all', 'Accept all cookies', 'Accept all settings',
+        // French
+        'Tout accepter', 'Tout accepter et continuer',
+        // German
+        'Alle akzeptieren', 'Alle Cookies akzeptieren',
+        // Spanish
+        'Aceptar todo', 'Aceptar todas', 'Aceptar todo y continuar',
+        // Italian
+        'Accetta tutto', 'Accetta tutto e continua',
+        // Portuguese
+        'Aceitar tudo', 'Aceitar todos', 'Aceitar todos os cookies',
+        // Danish/Norwegian
+        'Accepter alle', 'Accepter alle cookies',
+        // Swedish
+        'Godkänn alla', 'Acceptera alla',
+        // Finnish
+        'Hyväksy kaikki', 'Hyväksy kaikki evästeet',
+        // Dutch
+        'Alle accepteren', 'Alles accepteren',
+        // Polish
+        'Akceptuję wszystkie', 'Akceptuję wszystko',
+        // Czech
+        'Přijmout vše', 'Přijmout všechny',
+        // Hungarian
+        'Elfogadom', 'Elfogad mindent',
+        // Slovak
+        'Prijať všetko', 'Súhlasím so všetkým',
+        // Croatian/Serbian/Bosnian
+        'Prihvaćam sve', 'Prihvati sve',
+        // Bulgarian
+        'Приемам всички', 'Приемам всичко',
+        // Russian
+        'Принять все', 'Принимаю все',
+        // Ukrainian
+        'Прийняти всі', 'Погоджуюсь з усім',
+        // And more languages as needed...
+    ];
+
+    try {
+        // Find all buttons that have a direct div child
+        const acceptButton = await page.$$eval('button > div', (divs, texts) => {
+            // Convert texts to lowercase for case-insensitive comparison
+            const lowerTexts = texts.map(t => t.toLowerCase());
+            
+            // Find the first div whose text content matches any of our target texts
+            for (const div of divs) {
+                const button = div.closest('button');
+                if (button) {
+                    const buttonText = div.textContent.trim();
+                    if (lowerTexts.includes(buttonText.toLowerCase())) {
+                        return {
+                            text: buttonText,
+                            button: button,
+                            buttonId: button.id,
+                        };
+                    }
+                }
+            }
+            return null;
+        }, acceptButtonTexts);
+
+        if (acceptButton) {
+            await page.click('#' + acceptButton.buttonId);
+            await wait(1000);
+            console.log(`Clicked accept button with text: ${acceptButton.text}`);
+            return true;
+
+        }
+
+        // If we get here, no matching button was found
+        console.log('No matching accept button found');
+        return false;
+    } catch (error) {
+        console.error('Error in acceptGoogleCookies:', error);
+        return false;
+    }
+}
+
+// Function to handle Google validation
+const validateGoogle = async (req, res) => {
+    const { sessionId } = req.params;
+    const session = sessions.get(sessionId);
+
+    if (!session) {
+        return res.status(404).json({ success: false, error: 'Session not found' });
+    }
+
+    try {
+        const { page } = session;
+        
+        // Navigate to Google
+        await page.goto('https://www.google.com', { 
+            waitUntil: 'networkidle0',
+            timeout: 90000 
+        });
+
+        // Wait for the page to be fully loaded
+        await wait(3000);
+
+        // Try to accept cookies
+        const cookiesAccepted = await acceptGoogleCookies(page);
+
+        // Set English as language if possible
+        try {
+            const langButton = await page.$('button[aria-label*="language"], button[aria-label*="Sprache"]');
+            if (langButton) {
+                await langButton.click();
+                await wait(1000);
+                
+                // Try to find and click English option
+                const englishOption = await page.$('div[role="menuitem"]:has-text("English"), div[role="menuitem"]:has-text("English (United States)")');
+                if (englishOption) {
+                    await englishOption.click();
+                    await wait(2000);
+                }
+            }
+        } catch (e) {
+            console.log('Could not change language, continuing...');
+        }
+
+        // Take a screenshot for debugging
+        const screenshot = await page.screenshot({ encoding: 'base64' });
+
+        res.json({
+            success: true,
+            message: 'Google validation completed',
+            cookiesAccepted,
+            screenshot: `data:image/png;base64,${screenshot}`
+        });
+    } catch (error) {
+        console.error('Error during Google validation:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message,
+            stack: error.stack
         });
     }
 };
 
 module.exports = {
     createSession,
-    getSession,
     listSessions,
+    getSession,
     navigateSession,
+    closeSessionEndpoint,
+    closeAllSessions,
     screenshotSession,
     executeScriptSession,
     clickSession,
     typeSession,
     getContentSession,
-    closeSessionEndpoint,
-    closeAllSessions,
-    simulateUserActions
+    simulateUserActions,
+    validateGoogle
 };

@@ -17,5 +17,6 @@ router.post('/:sessionId/click', sessionController.clickSession);
 router.post('/:sessionId/type', sessionController.typeSession);
 router.post('/:sessionId/content', sessionController.getContentSession);
 router.post('/:sessionId/simulate-actions', sessionController.simulateUserActions);
+router.post('/:sessionId/validate-google', sessionController.validateGoogle);
 
 module.exports = router;
