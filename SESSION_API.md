@@ -41,7 +41,7 @@ Create Session → Get Session ID → Use Session → Auto/Manual Close
 POST /api/session/create
 ```
 
-Creates a new browser session with custom configuration.
+Creates a new browser session with custom configuration. Each session maintains its own browser instance, cookies, and state.
 
 **Request Body:**
 ```json
@@ -97,7 +97,27 @@ Creates a new browser session with custom configuration.
 GET /api/session/list
 ```
 
-Lists all active sessions.
+Lists all active sessions with their details including creation time, last activity, and configuration.
+
+**Response:**
+```json
+{
+  "success": true,
+  "count": 2,
+  "sessions": [
+    {
+      "sessionId": "550e8400-e29b-41d4-a716-446655440000",
+      "created": "2025-10-31T12:00:00.000Z",
+      "lastActivity": "2025-10-31T12:05:00.000Z",
+      "config": {
+        "headless": true,
+        "width": 1920,
+        "height": 1080
+      }
+    }
+  ]
+}
+```
 
 **Response:**
 ```json
@@ -174,7 +194,68 @@ Closes all active sessions.
 
 ### Session Operations
 
-#### 6. Navigate
+### Session Operations
+
+#### 3. Get Session Info
+```
+GET /api/session/:sessionId
+```
+
+Retrieves detailed information about a specific session.
+
+**Response:**
+```json
+{
+  "success": true,
+  "sessionId": "550e8400-e29b-41d4-a716-446655440000",
+  "created": "2025-10-31T12:00:00.000Z",
+  "lastActivity": "2025-10-31T12:05:00.000Z",
+  "config": {
+    "headless": true,
+    "width": 1920,
+    "height": 1080,
+    "userAgent": "Mozilla/5.0...",
+    "locale": "en-US"
+  },
+  "currentUrl": "https://example.com",
+  "title": "Example Domain"
+}
+```
+
+#### 4. Close Session
+```
+DELETE /api/session/:sessionId
+```
+
+Closes the specified session and cleans up all associated resources.
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Session 550e8400-e29b-41d4-a716-446655440000 closed successfully"
+}
+```
+
+#### 5. Close All Sessions
+```
+DELETE /api/session
+```
+
+Closes all active sessions and cleans up all resources.
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Closed 3 session(s)",
+  "count": 3
+}
+```
+
+### Page Navigation
+
+#### 6. Navigate to URL
 ```
 POST /api/session/:sessionId/goto
 ```
@@ -213,6 +294,8 @@ Navigate to a URL in the session. This will always use the first tab.
 }
 ```
 
+### Content Retrieval
+
 #### 7. Take Screenshot
 ```
 POST /api/session/:sessionId/screenshot
@@ -237,7 +320,7 @@ Take a screenshot of the current page. This will always capture the first tab if
 
 **Response:** Image file (PNG/JPEG)
 
-#### 8. Execute Script
+#### 8. Execute JavaScript
 ```
 POST /api/session/:sessionId/execute
 ```
@@ -259,6 +342,8 @@ Execute JavaScript in the page context.
   "result": "Google"
 }
 ```
+
+### Page Interaction
 
 #### 9. Click Element
 ```
@@ -294,7 +379,7 @@ Click an element by CSS selector. This endpoint automatically handles:
 }
 ```
 
-#### 10. Type Text
+#### 10. Type Text in Input Field
 ```
 POST /api/session/:sessionId/type
 ```
@@ -319,7 +404,7 @@ Type text into an input field.
 }
 ```
 
-#### 11. Get Content
+#### 11. Get Page Content
 ```
 POST /api/session/:sessionId/content
 ```
@@ -340,6 +425,72 @@ Get page content (HTML or text).
   "sessionId": "550e8400-e29b-41d4-a716-446655440000",
   "title": "Google",
   "content": "..."
+}
+```
+
+### Advanced Features
+
+#### 12. Fill Input Field with Human-like Typing
+```
+POST /api/session/:sessionId/fill
+```
+
+Fill an input field with human-like typing behavior, including random delays and occasional mistakes.
+
+**Request Body:**
+```json
+{
+  "selector": "input[name='username']",
+  "text": "example_user",
+  "pressEnter": false
+}
+```
+
+**Parameters:**
+- `selector` (string, required) - CSS selector of the input element
+- `text` (string, required) - Text to type into the field
+- `pressEnter` (boolean, optional, default: false) - Whether to press Enter after typing
+
+**Response:**
+```json
+{
+  "success": true,
+  "sessionId": "550e8400-e29b-41d4-a716-446655440000",
+  "typed": true,
+  "charactersTyped": 12
+}
+```
+
+#### 13. Simulate User Actions
+```
+POST /api/session/:sessionId/simulate
+```
+
+Simulate realistic user behavior including scrolling, mouse movements, and random clicks.
+
+**Request Body:**
+```json
+{
+  "duration": 30,
+  "actions": ["scroll", "move", "click", "form"]
+}
+```
+
+**Parameters:**
+- `duration` (number, optional, default: 30) - Duration of simulation in seconds
+- `actions` (array, optional) - List of actions to perform:
+  - `scroll` - Random page scrolling
+  - `move` - Random mouse movements
+  - `click` - Random clicks on interactive elements
+  - `form` - Random form filling
+
+**Response:**
+```json
+{
+  "success": true,
+  "sessionId": "550e8400-e29b-41d4-a716-446655440000",
+  "actionsPerformed": 15,
+  "duration": 30
 }
 ```
 
