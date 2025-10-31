@@ -102,6 +102,55 @@ const startCleanupWorker = () => {
 startCleanupWorker();
 
 /**
+ * Get the first tab of the browser and bring it to front
+ * @param {Object} session - The session object
+ * @returns {Promise<Object>} The first page in the browser
+ */
+async function getFirstTab(session) {
+    try {
+        const pages = await session.browser.pages();
+        if (pages.length === 0) {
+            const newPage = await session.browser.newPage();
+            await newPage.setViewport({ width: 1366, height: 768 });
+            return newPage;
+        }
+        
+        // Focus the first tab
+        const firstPage = pages[0];
+        await firstPage.bringToFront();
+        return firstPage;
+    } catch (error) {
+        console.error('Error in getFirstTab:', error);
+        throw error;
+    }
+}
+
+/**
+ * Close all tabs except the first one
+ * @param {Object} session - The session object
+ */
+async function closeExtraTabs(session) {
+    try {
+        const pages = await session.browser.pages();
+        if (pages.length > 1) {
+            // Close all but the first tab
+            for (let i = 1; i < pages.length; i++) {
+                try {
+                    await pages[i].close();
+                } catch (closeError) {
+                    console.error('Error closing tab:', closeError);
+                }
+            }
+            // Update the active page to the first tab
+            session.page = await getFirstTab(session);
+        }
+    } catch (error) {
+        console.error('Error in closeExtraTabs:', error);
+        throw error;
+    }
+}
+
+/**
  * Create a new browser session with anti-detection measures
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
@@ -197,6 +246,21 @@ const createSession = async (req, res) => {
         // Launch browser and create page
         const browser = await puppeteer.launch(launchOptions);
         const page = await browser.newPage();
+        
+        // Store browser and page references in session
+        const sessionData = {
+            browser,
+            page,
+            userAgent: userAgent,
+            lastActivity: Date.now(),
+            stealth: stealth,
+            proxy: proxy || null,
+            cookies: [],
+            activeTabIndex: 0,
+            maxTabs: 1 // Only allow one tab
+        };
+        
+        sessions.set(sessionId, sessionData);
 
         // Apply stealth mode if enabled
         if (stealth) {
@@ -616,28 +680,123 @@ const clickSession = async (req, res) => {
     }
 
     const session = sessions.get(sessionId);
-    session.lastUsed = Date.now();
-
+    session.lastActivity = Date.now();
+    
     try {
-        await session.page.waitForSelector(selector, { timeout: 10000 });
-        await session.page.click(selector);
-        await wait(1000);
-
-        const newUrl = session.page.url();
-        const pageTitle = await session.page.title();
-
-        res.json({
-            success: true,
-            sessionId,
-            clicked: true,
-            url: newUrl,
-            title: pageTitle
+        // Ensure we're working with the first tab
+        const page = await getFirstTab(session);
+        session.page = page;
+        
+        // Wait for the selector to be visible with a reasonable timeout
+        await page.waitForSelector(selector, { 
+            visible: true,
+            timeout: 10000 
         });
+        
+        // Scroll the element into view with smooth scrolling
+        await page.evaluate(sel => {
+            const element = document.querySelector(sel);
+            if (element) {
+                element.scrollIntoView({ 
+                    behavior: 'smooth', 
+                    block: 'center',
+                    inline: 'nearest'
+                });
+            }
+        }, selector);
+        
+        // Add a small delay after scrolling
+        await new Promise(resolve => setTimeout(resolve, getRandomDelay(300, 800)));
+
+        // Get all matching elements
+        const elements = await page.$$(selector);
+
+        if (elements.length === 0) {
+            console.log("No elements found for selector:", selector);
+            return res.status(404).json({
+                error: 'Element not found',
+                message: `No elements found matching selector: ${selector}`
+            });
+        }
+
+        // Pick a random element to click
+        const randomIndex = Math.floor(Math.random() * elements.length);
+        const element = elements[randomIndex];
+        
+        try {
+            // Move mouse to the element with human-like movement
+            await element.hover();
+            await wait(randomDelay(200, 400));
+
+            // Click the element
+            await element.click({ delay: getRandomDelay(200, 400) });
+            await wait(randomDelay(2000, 5000));
+            // Handle any new tabs that might have opened
+            await closeExtraTabs(session);
+            
+            // Ensure we're back on the first tab
+            const firstPage = await getFirstTab(session);
+            session.page = firstPage;
+            
+            // Wait for navigation if it's a navigation click
+            try {
+                await firstPage.waitForNavigation({
+                    waitUntil: ['domcontentloaded', 'networkidle0'],
+                    timeout: 10000
+                });
+            } catch (e) {
+                // Navigation might have already completed or wasn't needed
+                console.log('Navigation check completed or not needed');
+            }
+            
+            // Final check to ensure we're on the first tab
+            const finalPage = await getFirstTab(session);
+            session.page = finalPage;
+            
+            // Get the final URL and title
+            const newUrl = finalPage.url();
+            const pageTitle = await finalPage.title();
+            
+            // Small delay to ensure any post-navigation actions complete
+            await new Promise(resolve => setTimeout(resolve, 500));
+
+            return res.json({
+                success: true,
+                sessionId,
+                clicked: true,
+                url: newUrl,
+                title: pageTitle
+            });
+            
+        } catch (clickError) {
+            console.error('Error during click action:', clickError);
+            // Even if there was an error, ensure we're on the first tab
+            await closeExtraTabs(session);
+            const firstPage = await getFirstTab(session);
+            session.page = firstPage;
+            
+            throw clickError; // Re-throw to be caught by the outer catch
+        }
+        
     } catch (error) {
-        console.error('Error clicking element:', error);
+        console.error('Error in clickSession:', error);
+        
+        // Ensure we're on the first tab even in case of error
+        try {
+            if (sessions.has(sessionId)) {
+                const session = sessions.get(sessionId);
+                await closeExtraTabs(session);
+                const firstPage = await getFirstTab(session);
+                session.page = firstPage;
+            }
+        } catch (cleanupError) {
+            console.error('Error during cleanup after click error:', cleanupError);
+        }
+        
         res.status(500).json({
-            error: 'Failed to click element',
-            message: error.message
+            error: 'Failed to perform click action',
+            message: error.message,
+            details: process.env.NODE_ENV === 'development' ? error.stack : undefined
         });
     }
 };
@@ -676,6 +835,220 @@ const typeSession = async (req, res) => {
         res.status(500).json({
             error: 'Failed to type text',
             message: error.message
+        });
+    }
+};
+
+/**
+ * Get the current page content as HTML
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ */
+/**
+ * Get a random delay to simulate human-like behavior
+ * @param {number} min - Minimum delay in ms
+ * @param {number} max - Maximum delay in ms
+ * @returns {number} Random delay in ms
+ */
+const getRandomDelay = (min, max) => Math.random() * (max - min) + min;
+
+/**
+ * Simulate human-like typing with random delays and occasional mistakes
+ * @param {Page} page - Puppeteer page object
+ * @param {string} selector - CSS selector for the input element
+ * @param {string} text - Text to type
+ * @param {boolean} pressEnter - Whether to press Enter after typing
+ */
+async function humanType(page, selector, text, pressEnter = false) {
+    // Random initial delay (like moving mouse to input)
+    await wait(getRandomDelay(200, 800));
+    
+    // Focus the input
+    await page.click(selector, {
+        delay: getRandomDelay(30, 100),
+        button: 'left',
+        clickCount: Math.random() > 0.8 ? 2 : 1  // Sometimes double-click to select all
+    });
+    
+    // Clear the input (but not always, sometimes users just append)
+    if (Math.random() > 0.3) {
+        await page.evaluate(sel => {
+            const input = document.querySelector(sel);
+            input.value = '';
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+        }, selector);
+        await wait(getRandomDelay(50, 200));
+    }
+    
+    // Type the text with human-like behavior
+    for (let i = 0; i < text.length; i++) {
+        const char = text[i];
+        
+        // Randomly make typos (5% chance)
+        if (Math.random() < 0.05 && i > 0) {
+            const typoChar = String.fromCharCode(char.charCodeAt(0) + (Math.random() > 0.5 ? 1 : -1));
+            await page.keyboard.press(typoChar, { delay: getRandomDelay(30, 120) });
+            await wait(getRandomDelay(100, 300));
+            await page.keyboard.press('Backspace', { delay: getRandomDelay(30, 80) });
+            await wait(getRandomDelay(100, 300));
+        }
+        
+        // Type the actual character
+        await page.keyboard.press(char, { delay: getRandomDelay(30, 150) });
+        
+        // Random pause between words or sometimes mid-word
+        if ((char === ' ' && Math.random() > 0.3) || Math.random() > 0.95) {
+            await wait(getRandomDelay(50, 500));
+        }
+    }
+    
+    // Sometimes press Tab instead of Enter, or do nothing
+    if (pressEnter) {
+        await wait(getRandomDelay(200, 800));
+        await page.keyboard.press('Enter');
+    }
+}
+
+/**
+ * Fill an input field with human-like typing
+ * @param {Object} req - Express request object
+ * @param {Object} req.params - Request parameters
+ * @param {string} req.params.sessionId - The session ID
+ * @param {Object} req.body - Request body
+ * @param {string} req.body.selector - CSS selector for the input element
+ * @param {string} req.body.text - Text to type
+ * @param {boolean} [req.body.pressEnter=false] - Whether to press Enter after typing
+ * @param {Object} res - Express response object
+ */
+const fillInput = async (req, res) => {
+    const { sessionId } = req.params;
+    const { selector, text, pressEnter = false } = req.body;
+
+    if (!sessions.has(sessionId)) {
+        return res.status(404).json({
+            error: 'Session not found',
+            message: `Session ${sessionId} does not exist or has expired`
+        });
+    }
+
+    if (!selector || text === undefined) {
+        return res.status(400).json({
+            error: 'Missing required parameters',
+            message: 'Both selector and text are required'
+        });
+    }
+
+    const session = sessions.get(sessionId);
+    session.lastActivity = Date.now();
+    
+    // Ensure we're using the first tab
+    const page = await getFirstTab(session);
+    session.page = page; // Update the active page in session
+
+    try {
+        // Wait for the element to be visible
+        await page.waitForSelector(selector, { 
+            visible: true, 
+            timeout: 10000 
+        });
+        
+        // Scroll the element into view
+        await page.evaluate(sel => {
+            const element = document.querySelector(sel);
+            if (element) element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, selector);
+        
+        // Add a small delay after scrolling
+        await new Promise(resolve => setTimeout(resolve, getRandomDelay(300, 800)));
+        
+        // Type the text with human-like behavior
+        await humanType(page, selector, text, pressEnter);
+
+        res.json({
+            success: true,
+            message: 'Text filled successfully' + (pressEnter ? ' and Enter was pressed' : ''),
+            selector,
+            textLength: text.length,
+            pressEnterPerformed: pressEnter
+        });
+    } catch (error) {
+        console.error(`[${sessionId}] Error filling input:`, error);
+        
+        res.status(500).json({
+            error: 'Failed to fill input',
+            message: error.message,
+            details: error.stack
+        });
+    }
+};
+
+/**
+ * Get the current page content as HTML
+ * @param {Object} req - Express request object
+ * @param {Object} res - Express response object
+ */
+const getPageHTML = async (req, res) => {
+    const { sessionId } = req.params;
+    const { waitFor = 'networkidle0', timeout = 30000 } = req.query;
+
+    if (!sessions.has(sessionId)) {
+        return res.status(404).json({
+            error: 'Session not found',
+            message: `Session ${sessionId} does not exist or has expired`
+        });
+    }
+
+    const session = sessions.get(sessionId);
+    session.lastActivity = Date.now();
+
+    try {
+        // Wait for network to be idle (Puppeteer's way)
+        await session.page.waitForNetworkIdle({ idleTime: 500, timeout: parseInt(timeout) });
+        
+        // Scroll to trigger lazy loading
+        await session.page.evaluate(async () => {
+            await new Promise(resolve => {
+                let totalHeight = 0;
+                const distance = 100;
+                const timer = setInterval(() => {
+                    const scrollHeight = document.body.scrollHeight;
+                    window.scrollBy(0, distance);
+                    totalHeight += distance;
+                    
+                    if(totalHeight >= scrollHeight || totalHeight > 2000) {
+                        clearInterval(timer);
+                        resolve();
+                    }
+                }, 100);
+            });
+        });
+        
+        // Get the full HTML content after all scripts have executed
+        const html = await session.page.content();
+        const renderedHTML = await session.page.evaluate(() => document.documentElement.outerHTML);
+        // Set content type to text/html
+        res.set('Content-Type', 'text/html');
+        
+        // Send the fully rendered HTML
+        res.send(renderedHTML);
+    } catch (error) {
+        console.error(`[${sessionId}] Error getting page HTML:`, error);
+        
+        // If we get a timeout, try to get whatever HTML is available
+        if (error.name === 'TimeoutError') {
+            try {
+                const html = await session.page.content();
+                res.set('Content-Type', 'text/html');
+                return res.send(html);
+            } catch (fallbackError) {
+                console.error(`[${sessionId}] Fallback HTML retrieval failed:`, fallbackError);
+            }
+        }
+        
+        res.status(500).json({
+            error: 'Failed to get page HTML',
+            message: error.message,
+            details: error.stack
         });
     }
 };
@@ -777,16 +1150,19 @@ async function moveMouse(page, x, y) {
     await wait(randomDelay(100, 300));
 }
 
-// Function to simulate human-like typing
-async function humanType(page, selector, text) {
-    await page.focus(selector);
-    for (let char of text) {
-        await page.type(selector, char, { delay: randomDelay(30, 150) });
-        // Randomly take longer breaks between some characters
-        if (Math.random() > 0.9) {
-            await wait(randomDelay(100, 500));
+// Function to simulate human-like typing (legacy version, use the new humanType function instead)
+async function simulateHumanTyping(page, selector, text) {
+    return new Promise(async (resolve) => {
+        const delay = (ms) => new Promise(res => setTimeout(res, ms));
+        
+        for (const char of text) {
+            await page.type(selector, char, { delay: Math.random() * 50 + 50 });
+            // Random delay between keystrokes (50-150ms)
+            await delay(Math.random() * 100 + 50);
         }
-    }
+        
+        resolve();
+    });
 }
 
 // Function to simulate random scrolling
@@ -1083,6 +1459,7 @@ module.exports = {
     createSession,
     listSessions,
     getSession,
+    getPageHTML,
     navigateSession,
     closeSessionEndpoint,
     closeAllSessions,
@@ -1092,5 +1469,6 @@ module.exports = {
     typeSession,
     getContentSession,
     simulateUserActions,
-    validateGoogle
+    validateGoogle,
+    fillInput
 };

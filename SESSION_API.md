@@ -7,6 +7,7 @@ The Session API allows you to create persistent browser sessions that you can co
 ## Key Features
 
 - ✅ **Persistent Sessions** - Keep browser instances alive between requests
+- ✅ **Tab Management** - Automatic handling of browser tabs and windows
 - ✅ **Custom Headers** - Set different headers per session
 - ✅ **Auto Cleanup** - Sessions automatically close after 10 minutes of inactivity
 - ✅ **Multiple Sessions** - Run multiple browsers simultaneously
@@ -178,7 +179,7 @@ Closes all active sessions.
 POST /api/session/:sessionId/goto
 ```
 
-Navigate to a URL in the session.
+Navigate to a URL in the session. This will always use the first tab.
 
 **Request Body:**
 ```json
@@ -186,9 +187,21 @@ Navigate to a URL in the session.
   "url": "https://www.google.com",
   "waitUntil": "domcontentloaded",
   "timeout": 90000,
-  "referer": "https://www.google.com/"
+  "referer": "https://www.google.com/",
+  "newTab": false
 }
 ```
+
+**Parameters:**
+- `url` (string, required) - The URL to navigate to
+- `waitUntil` (string, optional, default: 'domcontentloaded') - When to consider navigation succeeded
+  - `load` - Navigation is complete when the load event is fired
+  - `domcontentloaded` - Navigation is complete when the DOMContentLoaded event is fired
+  - `networkidle0` - Navigation is complete when there are no more than 0 network connections for at least 500ms
+  - `networkidle2` - Navigation is complete when there are no more than 2 network connections for at least 500ms
+- `timeout` (number, optional, default: 30000) - Maximum navigation time in milliseconds
+- `referer` (string, optional) - Referer header value
+- `newTab` (boolean, optional, default: false) - Open URL in a new tab (will still return to first tab after navigation)
 
 **Response:**
 ```json
@@ -205,16 +218,24 @@ Navigate to a URL in the session.
 POST /api/session/:sessionId/screenshot
 ```
 
-Take a screenshot of the current page.
+Take a screenshot of the current page. This will always capture the first tab if multiple tabs are open.
 
 **Request Body:**
 ```json
 {
-  "fullPage": true
+  "fullPage": true,
+  "quality": 80,
+  "type": "png"
 }
 ```
 
-**Response:** PNG image
+**Parameters:**
+- `fullPage` (boolean, optional, default: false) - Capture the full scrollable page
+- `quality` (number, optional, default: 80) - Image quality (0-100) for JPEG
+- `type` (string, optional, default: 'png') - Image format ('png' or 'jpeg')
+- `selector` (string, optional) - CSS selector to capture specific element
+
+**Response:** Image file (PNG/JPEG)
 
 #### 8. Execute Script
 ```
@@ -244,7 +265,11 @@ Execute JavaScript in the page context.
 POST /api/session/:sessionId/click
 ```
 
-Click an element by CSS selector.
+Click an element by CSS selector. This endpoint automatically handles:
+- Element visibility and scrolling
+- Human-like delays and interactions
+- Tab management (automatically closes new tabs and returns to the main tab)
+- Navigation waiting
 
 **Request Body:**
 ```json
@@ -252,6 +277,11 @@ Click an element by CSS selector.
   "selector": "input[name='btnK']"
 }
 ```
+
+**Parameters:**
+- `selector` (string, required) - CSS selector of the element to click
+- `waitForNavigation` (boolean, optional, default: true) - Wait for page navigation to complete
+- `timeout` (number, optional, default: 10000) - Maximum time to wait for the element in milliseconds
 
 **Response:**
 ```json

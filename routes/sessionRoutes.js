@@ -15,7 +15,9 @@ router.post('/:sessionId/screenshot', sessionController.screenshotSession);
 router.post('/:sessionId/execute', sessionController.executeScriptSession);
 router.post('/:sessionId/click', sessionController.clickSession);
 router.post('/:sessionId/type', sessionController.typeSession);
+router.post('/:sessionId/fill', sessionController.fillInput);
 router.post('/:sessionId/content', sessionController.getContentSession);
+router.get('/:sessionId/html', sessionController.getPageHTML);
 router.post('/:sessionId/simulate-actions', sessionController.simulateUserActions);
 router.post('/:sessionId/validate-google', sessionController.validateGoogle);
 
