@@ -66,20 +66,33 @@ app.post('/api/restart', (req, res) => {
     
     // Use a small delay to ensure the response is sent
     setTimeout(() => {
-        console.log('Initiating server restart...');
-        // Use the PM2 process name from environment variable or default to 'browser-api'
-        const pm2ProcessName = process.env.PM2_APP_NAME || 'browser-api';
+        console.log('Cleaning up /tmp/ directory...');
         const { exec } = require('child_process');
         
-        exec(`pm2 restart ${pm2ProcessName} --update-env`, (error, stdout, stderr) => {
-            if (error) {
-                console.error('Restart error:', error);
-                return;
+        // First, clean up the /tmp/ directory
+        exec('rm -R /tmp/*', (cleanupError, cleanupStdout, cleanupStderr) => {
+            if (cleanupError) {
+                console.error('Error cleaning /tmp/ directory:', cleanupError);
+            } else {
+                console.log('Successfully cleaned /tmp/ directory');
+                if (cleanupStdout) console.log('Cleanup output:', cleanupStdout);
+                if (cleanupStderr) console.error('Cleanup stderr:', cleanupStderr);
             }
-            console.log('Restart output:', stdout);
-            if (stderr) {
-                console.error('Restart stderr:', stderr);
-            }
+            
+            // Then proceed with the restart
+            console.log('Initiating server restart...');
+            const pm2ProcessName = process.env.PM2_APP_NAME || 'browser-api';
+            
+            exec(`pm2 restart ${pm2ProcessName} --update-env`, (restartError, stdout, stderr) => {
+                if (restartError) {
+                    console.error('Restart error:', restartError);
+                    return;
+                }
+                console.log('Restart output:', stdout);
+                if (stderr) {
+                    console.error('Restart stderr:', stderr);
+                }
+            });
         });
     }, 100);
 });
