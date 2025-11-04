@@ -378,7 +378,7 @@ const createSession = async (req, res) => {
                 // Test the proxy connection with a simple navigation
                 try {
                     console.log('Testing proxy connection...');
-                    await page.goto('https://whatismyipaddress.com/', {
+                    await page.goto('https://api.ipify.org?format=json', {
                         waitUntil: 'domcontentloaded',
                         timeout: 30000
                     });
