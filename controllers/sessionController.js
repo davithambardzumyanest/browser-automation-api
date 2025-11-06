@@ -877,7 +877,7 @@ async function humanType(page, selector, text, pressEnter = false) {
             input.value = '';
             input.dispatchEvent(new Event('input', { bubbles: true }));
         }, selector);
-        await wait(getRandomDelay(50, 200));
+        await wait(getRandomDelay(50, 60));
     }
     
     // Type the text with human-like behavior
@@ -887,24 +887,24 @@ async function humanType(page, selector, text, pressEnter = false) {
         // Randomly make typos (5% chance)
         if (Math.random() < 0.05 && i > 0) {
             const typoChar = String.fromCharCode(char.charCodeAt(0) + (Math.random() > 0.5 ? 1 : -1));
-            await page.keyboard.press(typoChar, { delay: getRandomDelay(30, 120) });
-            await wait(getRandomDelay(100, 300));
-            await page.keyboard.press('Backspace', { delay: getRandomDelay(30, 80) });
-            await wait(getRandomDelay(100, 300));
+            await page.keyboard.press(typoChar, { delay: getRandomDelay(30, 50) });
+            await wait(getRandomDelay(30, 60));
+            await page.keyboard.press('Backspace', { delay: getRandomDelay(30, 50) });
+            await wait(getRandomDelay(30, 70));
         }
         
         // Type the actual character
-        await page.keyboard.press(char, { delay: getRandomDelay(30, 150) });
+        await page.keyboard.press(char, { delay: getRandomDelay(10, 30) });
         
         // Random pause between words or sometimes mid-word
         if ((char === ' ' && Math.random() > 0.3) || Math.random() > 0.95) {
-            await wait(getRandomDelay(50, 500));
+            await wait(getRandomDelay(20, 50));
         }
     }
     
     // Sometimes press Tab instead of Enter, or do nothing
     if (pressEnter) {
-        await wait(getRandomDelay(200, 800));
+        await wait(getRandomDelay(60, 100));
         await page.keyboard.press('Enter');
     }
 }
