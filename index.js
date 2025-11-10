@@ -70,7 +70,8 @@ app.post('/api/restart', (req, res) => {
         const { exec } = require('child_process');
         
         // First, clean up the /tmp/ directory
-        exec('rm -R /tmp/*', (cleanupError, cleanupStdout, cleanupStderr) => {
+        // Use find + xargs to handle the case when /tmp/ is empty
+        exec('find /tmp/ -mindepth 1 -delete 2>/dev/null || true', (cleanupError, cleanupStdout, cleanupStderr) => {
             if (cleanupError) {
                 console.error('Error cleaning /tmp/ directory:', cleanupError);
             } else {
