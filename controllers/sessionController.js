@@ -60,7 +60,8 @@ const BROWSER_ARGS = [
     '--disable-search-geolocation-disclosure',
     '--disable-features=site-per-process',
     '--disable-blink-features',
-    '--disable-blink-features=AutomationControlled'
+    '--disable-blink-features=AutomationControlled',
+    '--blink-settings=imagesEnabled=false'
 ];
 
 // Common user agents for rotation
@@ -246,6 +247,18 @@ const createSession = async (req, res) => {
         // Launch browser and create page
         const browser = await puppeteer.launch(launchOptions);
         const page = await browser.newPage();
+        
+        // Enable request interception to block images, fonts, and stylesheets
+        await page.setRequestInterception(true);
+        page.on('request', (request) => {
+            const resourceType = request.resourceType();
+            // Block images, fonts, and stylesheets
+            if (['image', 'font', 'stylesheet'].includes(resourceType)) {
+                request.abort();
+            } else {
+                request.continue();
+            }
+        });
         
         // Store browser and page references in session
         const sessionData = {
