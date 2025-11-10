@@ -754,12 +754,6 @@ const clickSession = async (req, res) => {
         const page = await getFirstTab(session);
         session.page = page;
         
-        // Wait for the selector to be visible with a reasonable timeout
-        await page.waitForSelector(selector, { 
-            visible: true,
-            timeout: 10000 
-        });
-        
         // Scroll the element into view with smooth scrolling
         await page.evaluate(sel => {
             const element = document.querySelector(sel);
@@ -771,9 +765,6 @@ const clickSession = async (req, res) => {
                 });
             }
         }, selector);
-        
-        // Add a small delay after scrolling
-        await new Promise(resolve => setTimeout(resolve, getRandomDelay(300, 800)));
 
         // Get all matching elements
         const elements = await page.$$(selector);
@@ -793,11 +784,11 @@ const clickSession = async (req, res) => {
         try {
             // Move mouse to the element with human-like movement
             await element.hover();
-            await wait(randomDelay(200, 400));
+            await wait(randomDelay(100, 250));
 
             // Click the element
             await element.click({ delay: getRandomDelay(200, 400) });
-            await wait(randomDelay(2000, 5000));
+            await wait(randomDelay(1000, 2000));
             // Handle any new tabs that might have opened
             await closeExtraTabs(session);
             
@@ -809,7 +800,7 @@ const clickSession = async (req, res) => {
             try {
                 await firstPage.waitForNavigation({
                     waitUntil: ['domcontentloaded', 'networkidle0'],
-                    timeout: 10000
+                    timeout: 3000
                 });
             } catch (e) {
                 // Navigation might have already completed or wasn't needed
@@ -823,9 +814,6 @@ const clickSession = async (req, res) => {
             // Get the final URL and title
             const newUrl = finalPage.url();
             const pageTitle = await finalPage.title();
-            
-            // Small delay to ensure any post-navigation actions complete
-            await new Promise(resolve => setTimeout(resolve, 500));
 
             return res.json({
                 success: true,
