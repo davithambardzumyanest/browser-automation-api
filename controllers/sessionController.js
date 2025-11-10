@@ -789,9 +789,7 @@ const clickSession = async (req, res) => {
             // Click the element
             await element.click({ delay: getRandomDelay(200, 400) });
             await wait(randomDelay(1000, 2000));
-            // Handle any new tabs that might have opened
-            await closeExtraTabs(session);
-            
+
             // Ensure we're back on the first tab
             const firstPage = await getFirstTab(session);
             session.page = firstPage;
