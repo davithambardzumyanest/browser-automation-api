@@ -248,50 +248,16 @@ const createSession = async (req, res) => {
         const browser = await puppeteer.launch(launchOptions);
         const page = await browser.newPage();
         
-        // Enhanced request interception to block all images and unnecessary resources
+        // Enable request interception to block images, fonts, and stylesheets
         await page.setRequestInterception(true);
-        
-        // Block all images and other non-essential resources
         page.on('request', (request) => {
-            const resourceType = request.resourceType().toLowerCase();
-            const url = request.url().toLowerCase();
-            const headers = request.headers();
-            
-            // Block all image-related resources
-            const blockedResourceTypes = new Set([
-                'image', 'imageset', 'media', 'font', 'stylesheet', 'manifest',
-                'prefetch', 'subresource', 'object', 'beacon', 'csp_report',
-                'imagesrcset', 'texttrack', 'eventsource', 'websocket',
-                'webmanifest', 'other'
-            ]);
-            
-            // Block common image and font extensions
-            const blockedExtensions = [
-                // Image formats
-                '.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.ico',
-                '.tiff', '.bmp', '.avif', '.apng', '.jfif', '.pjpeg', '.pjp',
-                // Font formats
-                '.woff', '.woff2', '.ttf', '.eot', '.otf',
-                // Other media
-                '.mp4', '.webm', '.ogg', '.mp3', '.wav', '.flac', '.aac', '.m4a'
-            ];
-            
-            // Check if the request should be blocked
-            const isBlockedByType = blockedResourceTypes.has(resourceType);
-            const isBlockedExtension = blockedExtensions.some(ext => url.endsWith(ext));
-            const isImageRequest = url.includes('image/') || 
-                                 (headers['content-type'] && headers['content-type'].includes('image/'));
-            const isFontRequest = url.includes('font/') || 
-                                (headers['content-type'] && headers['content-type'].includes('font/'));
-            
-            // Block requests that match any blocking criteria
-            if (isBlockedByType || isBlockedExtension || isImageRequest || isFontRequest) {
+            const resourceType = request.resourceType();
+            // Block images, fonts, and stylesheets
+            if (['image', 'font'].includes(resourceType)) {
                 request.abort();
-                return;
+            } else {
+                request.continue();
             }
-            
-            // Allow the request to continue if it doesn't match any blocking criteria
-            request.continue();
         });
         
         // Store browser and page references in session
