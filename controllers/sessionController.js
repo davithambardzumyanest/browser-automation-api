@@ -733,7 +733,12 @@ const checkXPath = async (req, res) => {
 // Click element
 const clickSession = async (req, res) => {
     const { sessionId } = req.params;
-    const { selector } = req.body;
+    const { 
+        selector, 
+        waitForNavigation = true, 
+        allowNewTab = false,
+        navigationTimeout = 10000
+    } = req.body;
 
     if (!selector) {
         return res.status(400).json({ error: 'Selector is required' });
@@ -753,6 +758,9 @@ const clickSession = async (req, res) => {
         // Ensure we're working with the first tab
         const page = await getFirstTab(session);
         session.page = page;
+        
+        // Store the current URL before clicking
+        const originalUrl = page.url();
         
         // Scroll the element into view with smooth scrolling
         await page.evaluate(sel => {
@@ -786,38 +794,77 @@ const clickSession = async (req, res) => {
             await element.hover();
             await wait(randomDelay(100, 250));
 
+            // Set up navigation promise before clicking
+            const navigationPromise = waitForNavigation ? 
+                page.waitForNavigation({ 
+                    waitUntil: ['domcontentloaded', 'networkidle0'],
+                    timeout: navigationTimeout
+                }).catch(e => console.log('Navigation timeout/error:', e.message)) : 
+                Promise.resolve();
+
+            // Set up new tab handling if allowed
+            let newTabResolve;
+            const newTabPromise = new Promise((resolve) => {
+                newTabResolve = resolve;
+            });
+
+            const handleNewTab = async (target) => {
+                try {
+                    const newPage = await target.page();
+                    if (newPage) {
+                        // Close the original page if it's still open
+                        try { await page.close(); } catch (e) {}
+                        session.page = newPage;
+                        session.browser = session.browser; // Keep the same browser instance
+                        newTabResolve(newPage);
+                        return true;
+                    }
+                } catch (e) {
+                    console.error('Error handling new tab:', e);
+                }
+                return false;
+            };
+
+            if (allowNewTab && session.browser) {
+                session.browser.on('targetcreated', handleNewTab);
+                // Set a timeout to clean up the event listener
+                setTimeout(() => {
+                    if (session.browser) {
+                        session.browser.off('targetcreated', handleNewTab);
+                    }
+                    newTabResolve();
+                }, navigationTimeout);
+            }
+
             // Click the element
             await element.click({ delay: getRandomDelay(200, 400) });
-            await wait(randomDelay(1000, 2000));
+            
+            // Wait for either navigation or new tab, but don't fail if neither happens
+            await Promise.race([
+                Promise.all([navigationPromise, newTabPromise]),
+                new Promise(resolve => setTimeout(resolve, navigationTimeout))
+            ]);
 
-            // Ensure we're back on the first tab
-            const firstPage = await getFirstTab(session);
-            session.page = firstPage;
-            
-            // Wait for navigation if it's a navigation click
-            try {
-                await firstPage.waitForNavigation({
-                    waitUntil: ['domcontentloaded', 'networkidle0'],
-                    timeout: 3000
-                });
-            } catch (e) {
-                // Navigation might have already completed or wasn't needed
-                console.log('Navigation check completed or not needed');
+            // Clean up the event listener if it wasn't already removed
+            if (allowNewTab && session.browser) {
+                session.browser.off('targetcreated', handleNewTab);
             }
-            
-            // Final check to ensure we're on the first tab
-            const finalPage = await getFirstTab(session);
-            session.page = finalPage;
-            
+
+            // Update the active page reference
+            const activePage = await getFirstTab(session);
+            session.page = activePage;
+            session.lastActivity = Date.now();
+
             // Get the final URL and title
-            const newUrl = finalPage.url();
-            const pageTitle = await finalPage.title();
+            const finalUrl = activePage.url();
+            const pageTitle = await activePage.title();
 
             return res.json({
                 success: true,
                 sessionId,
                 clicked: true,
-                url: newUrl,
+                navigated: finalUrl !== originalUrl,
+                url: finalUrl,
                 title: pageTitle
             });
             
