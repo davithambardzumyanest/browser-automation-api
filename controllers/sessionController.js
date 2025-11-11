@@ -248,15 +248,47 @@ const createSession = async (req, res) => {
         const browser = await puppeteer.launch(launchOptions);
         const page = await browser.newPage();
         
-        // Enable request interception to block images, fonts, and stylesheets
+        // Enable request interception to block unnecessary resources
         await page.setRequestInterception(true);
         page.on('request', (request) => {
             const resourceType = request.resourceType();
-            // Block images, fonts, and stylesheets
-            if (['image', 'font', 'stylesheet'].includes(resourceType)) {
+            // Block unnecessary resources to save bandwidth
+            const blockedResourceTypes = [
+                'image',
+                'font',
+                'stylesheet',
+                'media',
+                'imageset',
+                'manifest',
+                'prefetch',
+                'subresource',
+                'object',
+                'beacon',
+                'csp_report',
+                'imagesrcset',
+                'texttrack',
+                'eventsource',
+                'websocket',
+                'webmanifest',
+                'xhr',
+                'fetch',
+                'other'
+            ];
+
+            // Only allow document, script, and xhr requests by default
+            if (blockedResourceTypes.includes(resourceType)) {
                 request.abort();
             } else {
-                request.continue();
+                // Also block specific resource URLs that might contain images
+                const url = request.url().toLowerCase();
+                const blockedExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.woff', '.woff2', '.ttf', '.eot'];
+                const isBlockedExtension = blockedExtensions.some(ext => url.endsWith(ext));
+                
+                if (isBlockedExtension) {
+                    request.abort();
+                } else {
+                    request.continue();
+                }
             }
         });
         
