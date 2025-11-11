@@ -553,37 +553,32 @@ const navigateSession = async (req, res) => {
             options.referer = referer;
         }
 
-        let targetPage = session.page;
-        const browser = await targetPage.browser();
+        const browser = session.browser;
         const pages = await browser.pages();
         
-        // If newTab is true or no pages are open, create a new tab
-        if (newTab || pages.length === 0) {
-            targetPage = await browser.newPage();
-            await targetPage.setViewport({ width: 1366, height: 768 });
-        } else {
-            // Try to find an existing tab with the same URL
-            const targetUrl = new URL(url);
-            const matchingPage = pages.find(async (page) => {
-                try {
-                    const pageUrl = new URL(page.url());
-                    return pageUrl.hostname === targetUrl.hostname && 
-                           pageUrl.pathname === targetUrl.pathname;
-                } catch (e) {
-                    return false;
-                }
-            });
-            
-            if (matchingPage) {
-                targetPage = matchingPage;
-                await targetPage.bringToFront();
-            } else if (pages.length < 10) { // Limit to 10 tabs to prevent memory issues
-                targetPage = await browser.newPage();
-                await targetPage.setViewport({ width: 1366, height: 768 });
-            } else {
-                // If we have too many tabs, use the current page
-                targetPage = session.page;
+        // Close all tabs except the first one
+        for (let i = pages.length - 1; i > 0; i--) {
+            try {
+                await pages[i].close();
+            } catch (e) {
+                console.error(`Error closing tab ${i}:`, e);
             }
+        }
+        
+        // Get the first (and only) remaining tab
+        const [firstPage] = await browser.pages();
+        if (!firstPage) {
+            throw new Error('No pages available after closing tabs');
+        }
+        
+        // Update session's page reference
+        session.page = firstPage;
+        
+        // If newTab is requested, open a new tab after closing others
+        let targetPage = firstPage;
+        if (newTab) {
+            targetPage = await browser.newPage();
+            session.page = targetPage;
         }
 
         // Update the session's page reference
@@ -774,25 +769,99 @@ const clickSession = async (req, res) => {
             }
         }, selector);
 
-        // Get all matching elements
-        const elements = await page.$$(selector);
+        // Helper function to find a clickable element
+        const findClickableElement = async (selector, maxAttempts = 3) => {
+            let attempts = 0;
+            while (attempts < maxAttempts) {
+                try {
+                    // Wait for the element to be in the DOM and visible
+                    await page.waitForSelector(selector, { 
+                        visible: true,
+                        timeout: 5000 
+                    });
+                    
+                    // Get all matching elements
+                    const elements = await page.$$(selector);
+                    
+                    if (elements.length === 0) {
+                        throw new Error('No elements found');
+                    }
+                    
+                    // Try to find a clickable element
+                    for (const el of elements) {
+                        try {
+                            // Check if element is visible and in viewport
+                            const isVisible = await el.isIntersectingViewport();
+                            if (!isVisible) {
+                                // Scroll element into view if not visible
+                                await el.evaluate(el => el.scrollIntoView({
+                                    behavior: 'smooth',
+                                    block: 'center',
+                                    inline: 'center'
+                                }));
+await new Promise(resolve => setTimeout(resolve, 500)); // Wait for scroll to complete
+                            }
+                            
+                            // Check if element is clickable
+                            await el.hover().catch(() => { throw new Error('Element not hoverable'); });
+                            return el; // If we got here, element is clickable
+                        } catch (e) {
+                            console.log(`Element not clickable, trying next one: ${e.message}`);
+                            continue;
+                        }
+                    }
+                    
+                    // If we get here, no elements were clickable
+                    throw new Error('No clickable elements found');
+                    
+                } catch (e) {
+                    attempts++;
+                    console.log(`Attempt ${attempts}/${maxAttempts} failed:`, e.message);
+                    if (attempts >= maxAttempts) {
+                        throw e;
+                    }
+                    await new Promise(resolve => setTimeout(resolve, 1000)); // Wait before retry
+                }
+            }
+            throw new Error('Failed to find clickable element after multiple attempts');
+        };
 
-        if (elements.length === 0) {
-            console.log("No elements found for selector:", selector);
+        // Find a clickable element
+        let element;
+        try {
+            element = await findClickableElement(selector);
+        } catch (error) {
+            console.error('Error finding clickable element:', error);
             return res.status(404).json({
-                error: 'Element not found',
-                message: `No elements found matching selector: ${selector}`
+                error: 'No clickable element found',
+                message: `Could not find a clickable element matching selector: ${selector}`,
+                details: process.env.NODE_ENV === 'development' ? error.message : undefined
             });
         }
-
-        // Pick a random element to click
-        const randomIndex = Math.floor(Math.random() * elements.length);
-        const element = elements[randomIndex];
         
         try {
+            // Wait a bit before interacting with the element
+            await new Promise(resolve => setTimeout(resolve, randomDelay(100, 250)));
+            
+            // Scroll into view if needed
+            await element.evaluate(el => {
+                el.scrollIntoView({
+                    behavior: 'smooth',
+                    block: 'center',
+                    inline: 'center'
+                });
+            });
+            
+            // Wait for any potential animations
+            await new Promise(resolve => setTimeout(resolve, randomDelay(100, 250)));
+            
             // Move mouse to the element with human-like movement
-            await element.hover();
-            await wait(randomDelay(100, 250));
+            try {
+                await element.hover();
+                await new Promise(resolve => setTimeout(resolve, randomDelay(100, 250)));
+            } catch (hoverError) {
+                console.log('Hover failed, but continuing with click:', hoverError.message);
+            }
 
             // Set up navigation promise before clicking
             const navigationPromise = waitForNavigation ? 
@@ -812,8 +881,21 @@ const clickSession = async (req, res) => {
                 try {
                     const newPage = await target.page();
                     if (newPage) {
-                        // Close the original page if it's still open
-                        try { await page.close(); } catch (e) {}
+                        // Wait for 2-3 seconds before closing the original tab
+                        const closeDelay = randomDelay(2000, 3000);
+                        console.log(`New tab opened, will close original tab in ${closeDelay}ms`);
+
+                        setTimeout(async () => {
+                            try {
+                                if (!page.isClosed()) {
+                                    console.log('Closing original tab...');
+                                    await page.close();
+                                }
+                            } catch (e) {
+                                console.error('Error closing original tab:', e);
+                            }
+                        }, closeDelay);
+                        
                         session.page = newPage;
                         session.browser = session.browser; // Keep the same browser instance
                         newTabResolve(newPage);
