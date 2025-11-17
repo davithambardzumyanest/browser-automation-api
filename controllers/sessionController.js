@@ -60,8 +60,7 @@ const BROWSER_ARGS = [
     '--disable-search-geolocation-disclosure',
     '--disable-features=site-per-process',
     '--disable-blink-features',
-    '--disable-blink-features=AutomationControlled',
-    '--blink-settings=imagesEnabled=false'
+    '--disable-blink-features=AutomationControlled'
 ];
 
 // Common user agents for rotation
@@ -184,8 +183,14 @@ const createSession = async (req, res) => {
         proxy,
         slowMo = defaultSlowMo,
         devtools = defaultDevtools,
-        stealth = true
+        stealth = true,
+        allowMedia = false,
     } = req.body;
+    const browserArgs = BROWSER_ARGS
+
+    if (!allowMedia) {
+        browserArgs.push('--blink-settings=imagesEnabled=false');
+    }
 
     try {
         const sessionId = uuidv4();
@@ -193,7 +198,7 @@ const createSession = async (req, res) => {
         // Launch browser with custom options
         const launchOptions = {
             headless: headless ? 'new' : false,
-            args: [...BROWSER_ARGS],
+            args: [...browserArgs],
             defaultViewport: { 
                 width, 
                 height,
@@ -247,19 +252,40 @@ const createSession = async (req, res) => {
         // Launch browser and create page
         const browser = await puppeteer.launch(launchOptions);
         const page = await browser.newPage();
-        
+        let isIntercepting = false;
+
         // Enable request interception to block images, fonts, and stylesheets
         await page.setRequestInterception(true);
-        page.on('request', (request) => {
-            const resourceType = request.resourceType();
-            // Block images, fonts, and stylesheets
-            if (['image', 'font'].includes(resourceType)) {
-                request.abort();
-            } else {
-                request.continue();
-            }
-        });
-        
+        // page.on('request', (request) => {
+        //     if (allowMedia) {
+        //         request.continue();
+        //     }
+        //
+        //     const resourceType = request.resourceType();
+        //     // Block images, fonts, and stylesheets
+        //     if (['image', 'font'].includes(resourceType)) {
+        //         request.abort();
+        //     } else {
+        //         request.continue();
+        //     }
+        // });
+        if (!isIntercepting) {
+            isIntercepting = true;
+            page.on('request', async (request) => {
+                try {
+                    if (!allowMedia && ['image', 'font', 'media', 'imageset'].includes(request.resourceType())) {
+                        await request.abort();
+                    } else {
+                        await request.continue();
+                    }
+                } catch (error) {
+                    // Ignore errors from aborted requests
+                    if (!error.message.includes('Request is already handled')) {
+                        console.error('Request interception error:', error);
+                    }
+                }
+            });
+        }
         // Store browser and page references in session
         const sessionData = {
             browser,
