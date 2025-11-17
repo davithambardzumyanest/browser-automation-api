@@ -256,19 +256,6 @@ const createSession = async (req, res) => {
 
         // Enable request interception to block images, fonts, and stylesheets
         await page.setRequestInterception(true);
-        // page.on('request', (request) => {
-        //     if (allowMedia) {
-        //         request.continue();
-        //     }
-        //
-        //     const resourceType = request.resourceType();
-        //     // Block images, fonts, and stylesheets
-        //     if (['image', 'font'].includes(resourceType)) {
-        //         request.abort();
-        //     } else {
-        //         request.continue();
-        //     }
-        // });
         if (!isIntercepting) {
             isIntercepting = true;
             page.on('request', async (request) => {
