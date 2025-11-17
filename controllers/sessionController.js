@@ -50,10 +50,8 @@ const BROWSER_ARGS = [
     '--disable-back-forward-cache',
     '--disable-breakpad',
     '--disable-ipc-flooding-protection',
-    '--disable-remote-fonts',
     '--disable-session-crashed-bubble',
     '--force-color-profile=srgb',
-    '--enable-automation',
     '--no-default-browser-check',
     '--no-service-autorun',
     '--deny-permission-prompts',
@@ -1061,7 +1059,7 @@ async function humanType(page, selector, text, pressEnter = false) {
     // Focus the input
     await page.click(selector, {
         delay: getRandomDelay(30, 100),
-        button: 'left',
+        button: 'right',
         clickCount: Math.random() > 0.8 ? 2 : 1  // Sometimes double-click to select all
     });
     
