@@ -58,6 +58,8 @@ const BROWSER_ARGS = [
     '--disable-search-geolocation-disclosure',
     '--disable-features=site-per-process',
     '--disable-blink-features',
+    '--autoplay-policy=no-user-gesture-required',
+    '--enable-features=MediaSource',
     '--disable-blink-features=AutomationControlled'
 ];
 
