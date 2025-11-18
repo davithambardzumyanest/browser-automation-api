@@ -1057,49 +1057,35 @@ const getRandomDelay = (min, max) => Math.random() * (max - min) + min;
 async function humanType(page, selector, text, pressEnter = false) {
     // Random initial delay (like moving mouse to input)
     await wait(getRandomDelay(200, 800));
-    
-    // Focus the input
-    await page.click(selector, {
-        delay: getRandomDelay(30, 100),
-        button: 'right',
-        clickCount: Math.random() > 0.8 ? 2 : 1  // Sometimes double-click to select all
-    });
-    
-    // Clear the input (but not always, sometimes users just append)
-    if (Math.random() > 0.3) {
-        await page.evaluate(sel => {
-            const input = document.querySelector(sel);
-            input.value = '';
-            input.dispatchEvent(new Event('input', { bubbles: true }));
-        }, selector);
-        await wait(getRandomDelay(50, 60));
-    }
-    
-    // Type the text with human-like behavior
-    for (let i = 0; i < text.length; i++) {
-        const char = text[i];
-        
-        // Randomly make typos (5% chance)
-        if (Math.random() < 0.05 && i > 0) {
-            const typoChar = String.fromCharCode(char.charCodeAt(0) + (Math.random() > 0.5 ? 1 : -1));
-            await page.keyboard.press(typoChar, { delay: getRandomDelay(30, 50) });
-            await wait(getRandomDelay(30, 60));
-            await page.keyboard.press('Backspace', { delay: getRandomDelay(30, 50) });
-            await wait(getRandomDelay(30, 70));
+
+    // Focus the input (left click to focus)
+    await page.click(selector, { delay: getRandomDelay(30, 100) });
+
+    // Clear the input consistently to avoid partial leftover state
+    await page.evaluate(sel => {
+        const input = document.querySelector(sel);
+        if (input) {
+            input.focus();
+            if ('value' in input) input.value = '';
+            const evOpts = { bubbles: true, cancelable: true };
+            input.dispatchEvent(new Event('input', evOpts));
+            input.dispatchEvent(new Event('change', evOpts));
         }
-        
-        // Type the actual character
-        await page.keyboard.press(char, { delay: getRandomDelay(10, 30) });
-        
-        // Random pause between words or sometimes mid-word
-        if ((char === ' ' && Math.random() > 0.3) || Math.random() > 0.95) {
-            await wait(getRandomDelay(20, 50));
-        }
+    }, selector);
+    await wait(getRandomDelay(50, 120));
+
+    // Prefer insertText (supports full Unicode including emojis/flags)
+    try {
+        // When possible, insert full text at once
+        await page.keyboard.insertText(String(text));
+    } catch (_) {
+        // Fallback to page.type which also supports Unicode text
+        await page.type(selector, String(text), { delay: getRandomDelay(20, 60) });
     }
-    
-    // Sometimes press Tab instead of Enter, or do nothing
+
+    // Optionally press Enter
     if (pressEnter) {
-        await wait(getRandomDelay(60, 100));
+        await wait(getRandomDelay(60, 150));
         await page.keyboard.press('Enter');
     }
 }
