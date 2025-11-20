@@ -1054,25 +1054,34 @@ const getRandomDelay = (min, max) => Math.random() * (max - min) + min;
  * @param {string} text - Text to type
  * @param {boolean} pressEnter - Whether to press Enter after typing
  */
-async function humanType(page, selector, text, pressEnter = false) {
+async function humanType(page, selector, text, pressEnter = false, clearInput = false) {
     // Random initial delay (like moving mouse to input)
     await wait(getRandomDelay(200, 800));
 
     // Focus the input (left click to focus)
     await page.click(selector, { delay: getRandomDelay(30, 100) });
 
-    // Clear the input consistently to avoid partial leftover state
-    await page.evaluate(sel => {
-        const input = document.querySelector(sel);
-        if (input) {
-            input.focus();
-            if ('value' in input) input.value = '';
-            const evOpts = { bubbles: true, cancelable: true };
-            input.dispatchEvent(new Event('input', evOpts));
-            input.dispatchEvent(new Event('change', evOpts));
+    // Conditionally clear the input if requested
+    if (clearInput) {
+        try {
+            // Try selecting all and deleting (works for inputs and contenteditable)
+            await page.click(selector, { clickCount: 3 });
+            await page.keyboard.press('Backspace');
+        } catch (_) {
+            // Fallback: direct value clear and fire events
+            await page.evaluate(sel => {
+                const input = document.querySelector(sel);
+                if (input) {
+                    input.focus();
+                    if ('value' in input) input.value = '';
+                    const evOpts = { bubbles: true, cancelable: true };
+                    input.dispatchEvent(new Event('input', evOpts));
+                    input.dispatchEvent(new Event('change', evOpts));
+                }
+            }, selector);
         }
-    }, selector);
-    await wait(getRandomDelay(50, 120));
+        await wait(getRandomDelay(50, 120));
+    }
 
     // Prefer insertText (supports full Unicode including emojis/flags)
     try {
@@ -1103,7 +1112,7 @@ async function humanType(page, selector, text, pressEnter = false) {
  */
 const fillInput = async (req, res) => {
     const { sessionId } = req.params;
-    const { selector, text, pressEnter = false } = req.body;
+    const { selector, text, pressEnter = false, clearInput = true } = req.body;
 
     if (!sessions.has(sessionId)) {
         return res.status(404).json({
@@ -1142,8 +1151,8 @@ const fillInput = async (req, res) => {
         // Add a small delay after scrolling
         await new Promise(resolve => setTimeout(resolve, getRandomDelay(300, 800)));
         
-        // Type the text with human-like behavior
-        await humanType(page, selector, text, pressEnter);
+        // Type the text with human-like behavior, honoring clearInput flag
+        await humanType(page, selector, text, pressEnter, clearInput);
 
         res.json({
             success: true,
