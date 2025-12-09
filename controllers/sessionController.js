@@ -1446,7 +1446,8 @@ const simulateUserActions = async (req, res) => {
             while (Date.now() < endTime) {
                 try {
                     // Randomly choose an action
-                    const action = Math.floor(Math.random() * 5);
+                    // Only allow non-click actions: scroll, mouse move (hover), type in inputs, optional reload
+                    const action = Math.floor(Math.random() * 4);
                     
                     switch(action) {
                         case 0:
@@ -1456,12 +1457,9 @@ const simulateUserActions = async (req, res) => {
                             await randomMouseMovements(page);
                             break;
                         case 2:
-                            await randomClicks(page);
-                            break;
-                        case 3:
                             await fillRandomForms(page);
                             break;
-                        case 4:
+                        case 3:
                             // Random refresh (10% chance)
                             if (Math.random() < 0.1) {
                                 await page.reload({ waitUntil: 'networkidle0' });
