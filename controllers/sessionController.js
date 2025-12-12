@@ -60,7 +60,10 @@ const BROWSER_ARGS = [
     '--disable-blink-features',
     '--autoplay-policy=no-user-gesture-required',
     '--enable-features=MediaSource',
-    '--disable-blink-features=AutomationControlled'
+    '--disable-blink-features=AutomationControlled',
+    "--use-fake-ui-for-media-stream",
+    "--use-fake-device-for-media-stream",
+    "--allow-geolocation"
 ];
 
 // Common user agents for rotation
@@ -185,6 +188,10 @@ const createSession = async (req, res) => {
         devtools = defaultDevtools,
         stealth = true,
         allowMedia = false,
+        geolocation, // { latitude: number, longitude: number, accuracy?: number }
+        geolocationOrigin, // e.g. "https://example.com" (back-compat)
+        geolocationOrigins, // e.g. ["https://example.com", "https://maps.google.com"]
+        grantGeolocationOnNavigation = true,
     } = req.body;
     const browserArgs = BROWSER_ARGS
 
@@ -249,9 +256,121 @@ const createSession = async (req, res) => {
             launchOptions.userDataDir = `./sessions/${sessionId}`;
         }
 
+        // If geolocation is requested, avoid hard-deny prompts flag which can conflict with overrides
+        if (geolocation && typeof geolocation.latitude === 'number' && typeof geolocation.longitude === 'number') {
+            launchOptions.args = (launchOptions.args || []).filter(a => a !== '--deny-permission-prompts');
+        }
+
         // Launch browser and create page
         const browser = await puppeteer.launch(launchOptions);
         const page = await browser.newPage();
+
+        // Relay console logs from the page to Node (helps surface evaluateOnNewDocument logs)
+        const attachConsoleRelay = (p) => {
+            try {
+                p.on('console', msg => {
+                    try {
+                        const loc = msg.location?.() || {};
+                        console.log(`[page ${msg.type()}] ${msg.text()}${loc.url ? ` (${loc.url}:${loc.lineNumber}:${loc.columnNumber})` : ''}`);
+                    } catch (e) {
+                        console.log(`[page ${msg.type()}] ${msg.text()}`);
+                    }
+                });
+            } catch (_) {}
+        };
+        attachConsoleRelay(page);
+
+        // Also attach for any new pages (popups/new tabs)
+        browser.on('targetcreated', async target => {
+            try {
+                const newPage = await target.page();
+                if (newPage) attachConsoleRelay(newPage);
+            } catch (e) {
+                // ignore
+            }
+        });
+
+        // Normalize geolocation origins (support string or array)
+        const geoOrigins = Array.isArray(geolocationOrigins)
+            ? geolocationOrigins
+            : (geolocationOrigin ? [geolocationOrigin] : []);
+
+        // If geolocation is provided, apply it to the page and optionally pre-authorize origins
+        if (geolocation && typeof geolocation.latitude === 'number' && typeof geolocation.longitude === 'number') {
+            try {
+                // Ensure accuracy default
+                const geo = { accuracy: 50, ...geolocation };
+                await page.setGeolocation(geo);
+
+                if (geoOrigins.length) {
+                    const context = browser.defaultBrowserContext();
+                    for (const origin of geoOrigins) {
+                        try {
+                            await context.overridePermissions(origin, ['geolocation']);
+                        } catch (permErr) {
+                            console.warn(`Failed to pre-authorize geolocation for ${origin}:`, permErr.message);
+                        }
+                    }
+                }
+
+                // Inject a geolocation mock so early calls resolve with provided coordinates
+                await page.evaluateOnNewDocument(({ lat, lon, acc }) => {
+                    try {
+                        const makePosition = () => ({
+                            coords: {
+                                latitude: lat,
+                                longitude: lon,
+                                accuracy: acc ?? 50,
+                                altitude: null,
+                                altitudeAccuracy: null,
+                                heading: null,
+                                speed: null,
+                            },
+                            timestamp: Date.now(),
+                        });
+
+                        const geo = navigator.geolocation;
+
+                        if (!geo) return;
+
+                        const originalGet = geo.getCurrentPosition?.bind(geo);
+                        const originalWatch = geo.watchPosition?.bind(geo);
+
+                        geo.getCurrentPosition = function (success, error, options) {
+                            if (typeof success === 'function') {
+                                try { success(makePosition()); } catch (e) {}
+                            } else if (typeof error === 'function') {
+                                error({ code: 1, message: 'Permission denied' });
+                            }
+                        };
+
+                        geo.watchPosition = function (success, error, options) {
+                            let id = Math.floor(Math.random() * 1e6);
+                            if (typeof success === 'function') {
+                                try { success(makePosition()); } catch (e) {}
+                            }
+                            return id;
+                        };
+
+                        // Patch Permissions API for geolocation -> granted
+                        if (navigator.permissions && navigator.permissions.query) {
+                            const originalPermQuery = navigator.permissions.query.bind(navigator.permissions);
+                            navigator.permissions.query = (params) => {
+                                if (params && params.name === 'geolocation') {
+                                    return Promise.resolve({ state: 'granted' });
+                                }
+                                return originalPermQuery(params);
+                            };
+                        }
+                    } catch (e) {
+                        // swallow errors in preload script
+                    }
+                }, { lat: geo.latitude, lon: geo.longitude, acc: geo.accuracy });
+            } catch (geoErr) {
+                console.warn('Failed to set geolocation or permissions:', geoErr.message);
+            }
+        }
+
         let isIntercepting = false;
 
         // Enable request interception to block images, fonts, and stylesheets
@@ -467,7 +586,13 @@ const createSession = async (req, res) => {
                 userAgent: finalUserAgent,
                 headers: finalHeaders,
                 locale,
-                proxy: proxy ? (typeof proxy === 'string' ? proxy : proxy.server) : null
+                proxy: proxy ? (typeof proxy === 'string' ? proxy : proxy.server) : null,
+                geolocation: geolocation && typeof geolocation.latitude === 'number' && typeof geolocation.longitude === 'number'
+                    ? { accuracy: 50, ...geolocation }
+                    : null,
+                geolocationOrigin: geolocationOrigin || null, // deprecated in favor of geolocationOrigins
+                geolocationOrigins: geoOrigins,
+                grantGeolocationOnNavigation: Boolean(grantGeolocationOnNavigation),
             }
         });
 
@@ -597,8 +722,91 @@ const navigateSession = async (req, res) => {
         // Update the session's page reference
         session.page = targetPage;
         
+        // If geolocation config exists, pre-authorize and set geolocation before navigation
+        try {
+            const cfg = session.config || {};
+            if (cfg.geolocation && cfg.grantGeolocationOnNavigation) {
+                const origin = new URL(url).origin;
+                const context = browser.defaultBrowserContext();
+                // Pre-authorize the target origin
+                try {
+                    await context.overridePermissions(origin, ['geolocation']);
+                } catch (permErr) {
+                    console.warn('Failed to override geolocation permissions:', permErr.message);
+                }
+                // Also re-authorize any configured origins
+                if (Array.isArray(cfg.geolocationOrigins)) {
+                    for (const o of cfg.geolocationOrigins) {
+                        try {
+                            await context.overridePermissions(o, ['geolocation']);
+                        } catch (permErr) {
+                            console.warn(`Failed to override geolocation for ${o}:`, permErr.message);
+                        }
+                    }
+                }
+
+                // Grant permission for all current frame origins (main + iframes)
+                try {
+                    const frames = targetPage.frames();
+                    const uniqueOrigins = new Set();
+                    for (const f of frames) {
+                        try {
+                            const furl = f.url();
+                            if (furl && furl.startsWith('http')) uniqueOrigins.add(new URL(furl).origin);
+                        } catch (_) {}
+                    }
+                    for (const o of uniqueOrigins) {
+                        try { await context.overridePermissions(o, ['geolocation']); } catch (_) {}
+                    }
+                } catch (_) {}
+
+                // Keep granting for any later iframe navigations
+                try {
+                    const grantForFrame = async (frame) => {
+                        try {
+                            const u = frame.url();
+                            if (u && u.startsWith('http')) {
+                                await context.overridePermissions(new URL(u).origin, ['geolocation']);
+                            }
+                        } catch (_) {}
+                    };
+                    targetPage.on('framenavigated', grantForFrame);
+                } catch (_) {}
+                try {
+                    await targetPage.setGeolocation(cfg.geolocation);
+                } catch (geoErr) {
+                    console.warn('Failed to apply geolocation on target page:', geoErr.message);
+                }
+            }
+        } catch (prepErr) {
+            console.warn('Geolocation pre-navigation setup failed:', prepErr.message);
+        }
+
         // Navigate to the URL
         await targetPage.goto(url, options);
+        // Re-apply geolocation after navigation in case the page asked during load, and re-grant iframe origins
+        try {
+            const cfg = session.config || {};
+            if (cfg.geolocation && cfg.grantGeolocationOnNavigation) {
+                await targetPage.setGeolocation(cfg.geolocation);
+                try {
+                    const context = browser.defaultBrowserContext();
+                    const frames = targetPage.frames();
+                    const uniqueOrigins = new Set();
+                    for (const f of frames) {
+                        try {
+                            const furl = f.url();
+                            if (furl && furl.startsWith('http')) uniqueOrigins.add(new URL(furl).origin);
+                        } catch (_) {}
+                    }
+                    for (const o of uniqueOrigins) {
+                        try { await context.overridePermissions(o, ['geolocation']); } catch (_) {}
+                    }
+                } catch (_) {}
+            }
+        } catch (postNavGeoErr) {
+            console.warn('Failed to re-apply geolocation after navigation:', postNavGeoErr.message);
+        }
         const pageTitle = await targetPage.title();
         const pageUrl = targetPage.url();
 
