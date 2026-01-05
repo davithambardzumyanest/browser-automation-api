@@ -61,9 +61,6 @@ const BROWSER_ARGS = [
     '--autoplay-policy=no-user-gesture-required',
     '--enable-features=MediaSource',
     '--disable-blink-features=AutomationControlled',
-    "--use-fake-ui-for-media-stream",
-    "--use-fake-device-for-media-stream",
-    "--allow-geolocation"
 ];
 
 // Common user agents for rotation
