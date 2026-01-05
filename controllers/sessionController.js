@@ -1600,7 +1600,7 @@ async function randomClicks(page) {
     }
 }
 
-// Function to simulate form filling
+// Function to simulate form filling and clear the input by clicking the clear button
 async function fillRandomForms(page) {
     const inputs = await page.$$('input[type="text"], input[type="email"], textarea');
     for (const input of inputs) {
@@ -1614,17 +1614,52 @@ async function fillRandomForms(page) {
                     break;
                 case 'text':
                 default:
-                    value = ['Hello', 'BTC', 'Sample', 'News', ' ', ' ', ' ', ' ', 'Text' ,'a', 'b', 't', 'o', 'p', 'd'][Math.floor(Math.random() * 5)];
+                    value = ['Hello ', 'BTC ', 'Sample ', 'News ', 'Test ', 'Search ', 'Type ', 'Input ', 'Text ', 'Query '][Math.floor(Math.random() * 10)];
                     break;
             }
             
             try {
+                // Type the value
                 await input.type(value, { delay: randomDelay(30, 150) });
                 await wait(randomDelay(500, 1500));
+
+                
             } catch (error) {
                 console.log('Could not type into input, continuing...');
             }
         }
+    }
+}
+async function clearGoogleSearch(page){
+
+    // Try to find and click the clear button/icon after typing
+    try {
+        const clearButtonSelector = '#tsf > div:nth-child(1) > div > div > div > div > div > div > span > svg';
+        await page.waitForSelector(clearButtonSelector, { visible: true, timeout: 3000 });
+
+        // Scroll the clear button into view
+        await page.evaluate((sel) => {
+            const element = document.querySelector(sel);
+            if (element) {
+                element.scrollIntoView({
+                    behavior: 'smooth',
+                    block: 'center',
+                    inline: 'nearest'
+                });
+            }
+        }, clearButtonSelector);
+
+        // Click the clear button with human-like delay
+        await page.click(clearButtonSelector, {
+            delay: randomDelay(50, 200),
+            button: 'left'
+        });
+
+        console.log('Clicked clear button after typing');
+        await wait(randomDelay(500, 1000));
+
+    } catch (clearError) {
+        console.log('Could not find or click clear button:', clearError.message);
     }
 }
 
@@ -1666,6 +1701,9 @@ const simulateUserActions = async (req, res) => {
                             break;
                         case 2:
                             await fillRandomForms(page);
+                            if (Math.random() < 0.4) {
+                                await clearGoogleSearch(page);
+                            }
                             break;
                         case 3:
                             // Random refresh (10% chance)
