@@ -220,6 +220,9 @@ const createSession = async (req, res) => {
             ignoreDefaultArgs: ['--enable-automation']
         };
 
+        launchOptions.args.push(
+            `--lang=${locale}`
+        );
         // For non-headless mode (visible browser), optimize args for visibility
         if (!headless) {
             // Remove args that are only needed for headless mode
@@ -252,6 +255,23 @@ const createSession = async (req, res) => {
         if (userDataDir) {
             launchOptions.userDataDir = `./sessions/${sessionId}`;
         }
+        
+        // Set locale settings
+        const languageCode = locale.split('-')[0];
+        const acceptLanguage = `${locale},${languageCode};q=0.9,en;q=0.8`;
+        
+        // Update headers to include correct Accept-Language
+        if (headers) {
+            headers['Accept-Language'] = acceptLanguage;
+        } else {
+            headers = { 'Accept-Language': acceptLanguage };
+        }
+        
+        // Add extra arguments for locale
+        launchOptions.args.push(
+            `--lang=${locale}`,
+            `--accept-lang=${locale},${languageCode},en`
+        );
 
         // If geolocation is requested, avoid hard-deny prompts flag which can conflict with overrides
         if (geolocation && typeof geolocation.latitude === 'number' && typeof geolocation.longitude === 'number') {
@@ -261,6 +281,16 @@ const createSession = async (req, res) => {
         // Launch browser and create page
         const browser = await puppeteer.launch(launchOptions);
         const page = await browser.newPage();
+        
+        // Override navigator properties to match the specified locale
+        await page.evaluateOnNewDocument((locale, languageCode) => {
+            Object.defineProperty(navigator, 'language', {
+                get: () => locale
+            });
+            Object.defineProperty(navigator, 'languages', {
+                get: () => [locale, languageCode, 'en-US', 'en']
+            });
+        }, locale, languageCode);
 
         // Relay console logs from the page to Node (helps surface evaluateOnNewDocument logs)
         const attachConsoleRelay = (p) => {
