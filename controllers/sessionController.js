@@ -1772,7 +1772,7 @@ async function acceptGoogleCookies(page) {
     // Common "Accept all" translations in various languages
     const acceptButtonTexts = [
         // English
-        'Accept all', 'Accept all cookies', 'Accept all settings', 'Accept',
+        'Accept all', 'Accept all cookies', 'Accept all settings', 'Acceptér alle',
         // French
         'Tout accepter', 'Tout accepter et continuer',
         // German
