@@ -6,7 +6,7 @@ const { chromium } = require('playwright');
 puppeteer.use(StealthPlugin());
 
 // Browser instance pool
-let browser = null;
+let browsers = new Map();
 
 // Browser launch arguments
 const BROWSER_ARGS = [
@@ -19,27 +19,44 @@ const BROWSER_ARGS = [
     '--disable-gpu'
 ];
 
+// Get user data directory path
+const getUserDataDir = (profileId) => {
+    return `./profiles/account_${profileId || 'default'}`;
+};
+
 // Initialize browser with stealth mode
-const initBrowser = async () => {
-    if (!browser) {
-        browser = await puppeteer.launch({ 
+const initBrowser = async (profileId) => {
+    const userDataDir = getUserDataDir(profileId);
+    
+    if (!browsers.has(userDataDir)) {
+        const browserInstance = await puppeteer.launch({ 
             headless: 'new',
-            args: BROWSER_ARGS
+            args: BROWSER_ARGS,
+            userDataDir: userDataDir,
+            ignoreDefaultArgs: ['--disable-extensions']
+        });
+        
+        // Store browser instance in the map
+        browsers.set(userDataDir, browserInstance);
+        
+        // Handle browser close event to clean up
+        browserInstance.on('disconnected', () => {
+            browsers.delete(userDataDir);
         });
     }
-    return browser;
+    
+    return browsers.get(userDataDir);
 };
 
 // Get browser instance
-const getBrowser = async () => {
-    return await initBrowser();
+const getBrowser = async (profileId) => {
+    return await initBrowser(profileId);
 };
 
 // Create a new page (stealth plugin handles all anti-detection automatically)
-const createStealthPage = async () => {
-    const browserInstance = await getBrowser();
-    const page = await browserInstance.newPage();
-    return page;
+const createStealthPage = async (profileId) => {
+    const browserInstance = await getBrowser(profileId);
+    return await browserInstance.newPage();
 };
 
 // Helper function to set realistic headers

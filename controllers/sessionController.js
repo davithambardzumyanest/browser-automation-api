@@ -179,6 +179,7 @@ const createSession = async (req, res) => {
             'Cache-Control': 'max-age=0'
         },
         userDataDir,
+        profileId,
         locale = 'en-US',
         proxy,
         slowMo = defaultSlowMo,
@@ -190,7 +191,8 @@ const createSession = async (req, res) => {
         geolocationOrigins, // e.g. ["https://example.com", "https://maps.google.com"]
         grantGeolocationOnNavigation = true,
     } = req.body;
-    const browserArgs = BROWSER_ARGS
+    
+    const browserArgs = [...BROWSER_ARGS];
 
     if (!allowMedia) {
         browserArgs.push('--blink-settings=imagesEnabled=false');
@@ -251,8 +253,17 @@ const createSession = async (req, res) => {
             }
         }
 
-        // Add user data directory if specified (for persistent cookies)
-        if (userDataDir) {
+        // Set up user data directory
+        if (profileId) {
+            // Use profile-based directory if profileId is provided
+            launchOptions.userDataDir = `./profiles/account_${profileId}`;
+            // Ensure the directory exists
+            const fs = require('fs');
+            if (!fs.existsSync(launchOptions.userDataDir)) {
+                fs.mkdirSync(launchOptions.userDataDir, { recursive: true });
+            }
+        } else if (userDataDir) {
+            // Fallback to session-based directory if no profileId but userDataDir is true
             launchOptions.userDataDir = `./sessions/${sessionId}`;
         }
         
