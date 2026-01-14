@@ -256,11 +256,22 @@ const createSession = async (req, res) => {
         // Set up user data directory
         if (profileId) {
             // Use profile-based directory if profileId is provided
-            launchOptions.userDataDir = `./profiles/account_${profileId}`;
+            const profileDir = `./profiles/account_${profileId}`;
+            launchOptions.userDataDir = profileDir;
+            
             // Ensure the directory exists
             const fs = require('fs');
             if (!fs.existsSync(launchOptions.userDataDir)) {
                 fs.mkdirSync(launchOptions.userDataDir, { recursive: true });
+            }
+            
+            // Check if there's an existing session with the same profileId and close it
+            for (const [existingSessionId, session] of sessions.entries()) {
+                if (session.profileId === profileId) {
+                    console.log(`Closing existing session ${existingSessionId} with profileId ${profileId}`);
+                    await closeSession(existingSessionId);
+                    break;
+                }
             }
         } else if (userDataDir) {
             // Fallback to session-based directory if no profileId but userDataDir is true
@@ -617,6 +628,7 @@ const createSession = async (req, res) => {
             page,
             created: Date.now(),
             lastUsed: Date.now(),
+            profileId: profileId || null, // Store the profileId with the session
             config: {
                 headless,
                 width,
@@ -630,7 +642,7 @@ const createSession = async (req, res) => {
                     : null,
                 geolocationOrigin: geolocationOrigin || null, // deprecated in favor of geolocationOrigins
                 geolocationOrigins: geoOrigins,
-                grantGeolocationOnNavigation: Boolean(grantGeolocationOnNavigation),
+                grantGeolocationOnNavigation: Boolean(grantGeolocationOnNavigation)
             }
         });
 

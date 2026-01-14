@@ -87,10 +87,38 @@ const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // Close browser
 const closeBrowser = async () => {
-    if (browser) {
-        await browser.close();
-        browser = null;
+    console.log('Starting browser cleanup...');
+    console.log(`Found ${browsers.size} browser instances to close`);
+    
+    const closePromises = [];
+    
+    for (const [userDataDir, browserInstance] of browsers.entries()) {
+        console.log(`Attempting to close browser for ${userDataDir}`);
+        
+        try {
+            // Store the promise but don't await it yet
+            closePromises.push((async () => {
+                try {
+                    await browserInstance.close();
+                    browsers.delete(userDataDir);
+                    console.log(`Successfully closed browser for ${userDataDir}`);
+                } catch (error) {
+                    console.error(`Error closing browser for ${userDataDir}:`, error.message);
+                    // Remove from map even if close fails to prevent memory leaks
+                    browsers.delete(userDataDir);
+                }
+            })());
+        } catch (error) {
+            console.error(`Error preparing to close browser for ${userDataDir}:`, error.message);
+            browsers.delete(userDataDir);
+        }
     }
+    
+    // Wait for all close operations to complete
+    await Promise.all(closePromises);
+    
+    console.log('Browser cleanup completed');
+    return true;
 };
 
 // Take screenshot
