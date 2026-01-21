@@ -153,6 +153,46 @@ curl -X POST http://localhost:3000/api/pdf \
 | `/api/scroll` | POST | Scroll page |
 | `/api/pdf` | POST | Generate PDF |
 | `/api/type` | POST | Type text with delay |
+| `/api/sessions/create` | POST | Create a new browser session |
+| `/api/sessions/list` | GET | List all active sessions |
+| `/api/sessions/:sessionId` | GET | Get details for a specific session |
+| `/api/sessions/:sessionId` | DELETE | Close a specific session |
+| `/api/sessions/:sessionId/goto` | POST | Navigate to a URL within a session |
+| `/api/sessions/:sessionId/screenshot` | POST | Take a screenshot within a session |
+
+## Session Management
+
+### Create a Session
+
+Create a new browser session. This is useful for multi-step workflows where you need to maintain state (cookies, etc.) between requests.
+
+`POST /api/sessions/create`
+
+**Parameters**:
+
+- `headless` (boolean, optional): Whether to run the browser in headless mode. Defaults to `true`.
+- `width` (number, optional): The viewport width. Defaults to `1920`.
+- `height` (number, optional): The viewport height. Defaults to `1080`.
+- `userAgent` (string, optional): The user agent to use.
+- `locale` (string, optional): The locale to use (e.g., `en-US`).
+- `proxy` (string or object, optional): The proxy server to use.
+- `geolocation` (object, optional): An object with `latitude` and `longitude` to simulate a specific location.
+- `timezone` (string, optional): A valid timezone ID (e.g., `'America/New_York'`) to emulate the browser's timezone.
+
+**Example with Geolocation**:
+
+```bash
+curl -X POST http://localhost:3000/api/sessions/create \
+  -H "Content-Type: application/json" \
+  -d '{
+    "geolocation": {
+      "latitude": 40.7128,
+      "longitude": -74.0060
+    }
+  }'
+```
+
+This will return a `sessionId` that you can use in subsequent requests to perform actions within that session.
 
 ## Common Use Cases
 

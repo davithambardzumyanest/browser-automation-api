@@ -190,6 +190,7 @@ const createSession = async (req, res) => {
         geolocationOrigin, // e.g. "https://example.com" (back-compat)
         geolocationOrigins, // e.g. ["https://example.com", "https://maps.google.com"]
         grantGeolocationOnNavigation = true,
+        timezone, // e.g., 'America/New_York'
     } = req.body;
     
     const browserArgs = [...BROWSER_ARGS];
@@ -303,6 +304,15 @@ const createSession = async (req, res) => {
         // Launch browser and create page
         const browser = await puppeteer.launch(launchOptions);
         const page = await browser.newPage();
+
+        // If timezone is provided, emulate it
+        if (timezone) {
+            try {
+                await page.emulateTimezone(timezone);
+            } catch (tzError) {
+                console.warn(`Failed to set timezone "${timezone}":`, tzError.message);
+            }
+        }
         
         // Override navigator properties to match the specified locale
         await page.evaluateOnNewDocument((locale, languageCode) => {
@@ -341,8 +351,15 @@ const createSession = async (req, res) => {
 
         // Normalize geolocation origins (support string or array)
         const geoOrigins = Array.isArray(geolocationOrigins)
-            ? geolocationOrigins
+            ? [...geolocationOrigins] // Create a mutable copy
             : (geolocationOrigin ? [geolocationOrigin] : []);
+
+        // If geolocation is provided, always ensure Google Maps is a permitted origin
+        if (geolocation && typeof geolocation.latitude === 'number' && typeof geolocation.longitude === 'number') {
+            if (!geoOrigins.includes('https://www.google.com')) {
+                geoOrigins.push('https://www.google.com');
+            }
+        }
 
         // If geolocation is provided, apply it to the page and optionally pre-authorize origins
         if (geolocation && typeof geolocation.latitude === 'number' && typeof geolocation.longitude === 'number') {
@@ -351,8 +368,10 @@ const createSession = async (req, res) => {
                 const geo = { accuracy: 50, ...geolocation };
                 await page.setGeolocation(geo);
 
+                const context = browser.defaultBrowserContext();
+
+                // Pre-authorize any configured origins
                 if (geoOrigins.length) {
-                    const context = browser.defaultBrowserContext();
                     for (const origin of geoOrigins) {
                         try {
                             await context.overridePermissions(origin, ['geolocation']);
@@ -361,6 +380,34 @@ const createSession = async (req, res) => {
                         }
                     }
                 }
+
+                // Grant permission for all current frame origins (main + iframes)
+                try {
+                    const frames = page.frames();
+                    const uniqueOrigins = new Set();
+                    for (const f of frames) {
+                        try {
+                            const furl = f.url();
+                            if (furl && furl.startsWith('http')) uniqueOrigins.add(new URL(furl).origin);
+                        } catch (_) {}
+                    }
+                    for (const o of uniqueOrigins) {
+                        try { await context.overridePermissions(o, ['geolocation']); } catch (_) {}
+                    }
+                } catch (_) {}
+
+                // Keep granting for any later iframe navigations in this page
+                try {
+                    const grantForFrame = async (frame) => {
+                        try {
+                            const u = frame.url();
+                            if (u && u.startsWith('http')) {
+                                await context.overridePermissions(new URL(u).origin, ['geolocation']);
+                            }
+                        } catch (_) {}
+                    };
+                    page.on('framenavigated', grantForFrame);
+                } catch (_) {}
 
                 // Inject a geolocation mock so early calls resolve with provided coordinates
                 await page.evaluateOnNewDocument(({ lat, lon, acc }) => {
@@ -642,7 +689,8 @@ const createSession = async (req, res) => {
                     : null,
                 geolocationOrigin: geolocationOrigin || null, // deprecated in favor of geolocationOrigins
                 geolocationOrigins: geoOrigins,
-                grantGeolocationOnNavigation: Boolean(grantGeolocationOnNavigation)
+                grantGeolocationOnNavigation: Boolean(grantGeolocationOnNavigation),
+                timezone: timezone || null
             }
         });
 
