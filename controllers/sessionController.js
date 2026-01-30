@@ -1799,16 +1799,16 @@ const simulateUserActions = async (req, res) => {
                             break;
                         case 2:
                             await fillRandomForms(page);
-                            // if (Math.random() < 0.4) {
-                                // await clearGoogleSearch(page);
-                            // }
+                            if (Math.random() < 0.4) {
+                                await clearGoogleSearch(page);
+                            }
                             break;
                         case 3:
                             // // Random refresh (10% chance)
-                            // if (Math.random() < 0.1) {
-                            //     await page.reload({ waitUntil: 'networkidle0' });
-                            // await wait(randomDelay(2000, 5000));
-                            // }
+                            if (Math.random() < 0.1) {
+                                await page.reload({ waitUntil: 'networkidle0' });
+                                await wait(randomDelay(2000, 5000));
+                            }
                             break;
                     }
                     
