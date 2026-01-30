@@ -1742,30 +1742,30 @@ async function clearGoogleSearch(page){
             return
         }
 
-        // Try to find a clickable element
+        console.log(elements.length)
         for (const el of elements) {
-            try {
-                // Check if element is visible and in viewport
-                const isVisible = await el.isIntersectingViewport();
-                if (!isVisible) {
-                    // Scroll element into view if not visible
-                    await el.evaluate(el => el.scrollIntoView({
-                        behavior: 'smooth',
-                        block: 'center',
-                        inline: 'center'
-                    }));
-                    await new Promise(resolve => setTimeout(resolve, 500)); // Wait for scroll to complete
-                }
+            // Ensure the random element is in the viewport
+            const isVisible = await el.isIntersectingViewport();
+            if (!isVisible) {
+                await el.evaluate(el => el.scrollIntoView({
+                    behavior: 'smooth',
+                    block: 'center',
+                    inline: 'center'
+                }));
+                await new Promise(resolve => setTimeout(resolve, 500));
+            }
 
-                // Check if element is clickable
-                await el.hover().catch(() => { throw new Error('Element not hoverable'); });
-            } catch (e) {
-                console.log(`Element not clickable, trying next one: ${e.message}`);
-                continue;
+            // Resolve a clickable target: closest role=button container or the element itself
+            const btnHandle = await el.evaluateHandle(node => node.closest('div[role="button"]') || node);
+            const btn = btnHandle.asElement();
+            if (btn) {
+                await btn.hover().catch(() => {});
+                await btn.click({ delay: 20 });
+                console.log('Clicked clear button after typing (random element)');
+            } else {
+                console.log('Could not resolve clickable element for clear button');
             }
         }
-
-        console.log('Clicked clear button after typing');
         await wait(randomDelay(500, 1000));
 
     } catch (clearError) {
@@ -1813,7 +1813,7 @@ const simulateUserActions = async (req, res) => {
                             await fillRandomForms(page);
                             if (Math.random() < 0.4) {
                                 await clearGoogleSearch(page);
-                                if (Math.random() < 0.2) {
+                                if (Math.random() < 0.1) {
                                     await page.reload({ waitUntil: 'networkidle0' });
                                     await wait(randomDelay(2000, 5000));
                                 }
@@ -1821,7 +1821,7 @@ const simulateUserActions = async (req, res) => {
                             break;
                         case 3:
                             // // Random refresh (10% chance)
-                            if (Math.random() < 0.2) {
+                            if (Math.random() < 0.1) {
                                 await page.reload({ waitUntil: 'networkidle0' });
                                 await wait(randomDelay(2000, 5000));
                             }
