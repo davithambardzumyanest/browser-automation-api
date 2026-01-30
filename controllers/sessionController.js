@@ -1732,7 +1732,7 @@ async function clearGoogleSearch(page){
 
     // Try to find and click the clear button/icon after typing
     try {
-        const clearButtonSelector = '#tsf > div:nth-child(1) > div > div > div > div > div > div > span > svg';
+        const clearButtonSelector = 'button[type="button"]';
         await page.waitForSelector(clearButtonSelector, { visible: true, timeout: 3000 });
 
         // Scroll the clear button into view
@@ -1801,11 +1801,15 @@ const simulateUserActions = async (req, res) => {
                             await fillRandomForms(page);
                             if (Math.random() < 0.4) {
                                 await clearGoogleSearch(page);
+                                if (Math.random() < 0.2) {
+                                    await page.reload({ waitUntil: 'networkidle0' });
+                                    await wait(randomDelay(2000, 5000));
+                                }
                             }
                             break;
                         case 3:
                             // // Random refresh (10% chance)
-                            if (Math.random() < 0.1) {
+                            if (Math.random() < 0.2) {
                                 await page.reload({ waitUntil: 'networkidle0' });
                                 await wait(randomDelay(2000, 5000));
                             }
