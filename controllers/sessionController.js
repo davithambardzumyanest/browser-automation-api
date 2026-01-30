@@ -1732,11 +1732,11 @@ async function clearGoogleSearch(page){
 
     // Try to find and click the clear button/icon after typing
     try {
-        const clearButtonSelector = 'button[type="button"]';
+        const clearButtonSelector = 'div[role="button"] > span';
         await page.waitForSelector(clearButtonSelector, { visible: true, timeout: 3000 });
 
         // Get all matching elements
-        const elements = await page.$$(selector);
+        const elements = await page.$$(clearButtonSelector);
 
         if (elements.length === 0) {
             return
