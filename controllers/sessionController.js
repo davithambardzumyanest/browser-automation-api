@@ -1799,9 +1799,9 @@ const simulateUserActions = async (req, res) => {
                             break;
                         case 2:
                             await fillRandomForms(page);
-                            if (Math.random() < 0.4) {
-                                await clearGoogleSearch(page);
-                            }
+                            // if (Math.random() < 0.4) {
+                                // await clearGoogleSearch(page);
+                            // }
                             break;
                         case 3:
                             // // Random refresh (10% chance)
