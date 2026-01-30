@@ -1735,23 +1735,35 @@ async function clearGoogleSearch(page){
         const clearButtonSelector = 'button[type="button"]';
         await page.waitForSelector(clearButtonSelector, { visible: true, timeout: 3000 });
 
-        // Scroll the clear button into view
-        await page.evaluate((sel) => {
-            const element = document.querySelector(sel);
-            if (element) {
-                element.scrollIntoView({
-                    behavior: 'smooth',
-                    block: 'center',
-                    inline: 'nearest'
-                });
-            }
-        }, clearButtonSelector);
+        // Get all matching elements
+        const elements = await page.$$(selector);
 
-        // Click the clear button with human-like delay
-        await page.click(clearButtonSelector, {
-            delay: randomDelay(50, 200),
-            button: 'left'
-        });
+        if (elements.length === 0) {
+            return
+        }
+
+        // Try to find a clickable element
+        for (const el of elements) {
+            try {
+                // Check if element is visible and in viewport
+                const isVisible = await el.isIntersectingViewport();
+                if (!isVisible) {
+                    // Scroll element into view if not visible
+                    await el.evaluate(el => el.scrollIntoView({
+                        behavior: 'smooth',
+                        block: 'center',
+                        inline: 'center'
+                    }));
+                    await new Promise(resolve => setTimeout(resolve, 500)); // Wait for scroll to complete
+                }
+
+                // Check if element is clickable
+                await el.hover().catch(() => { throw new Error('Element not hoverable'); });
+            } catch (e) {
+                console.log(`Element not clickable, trying next one: ${e.message}`);
+                continue;
+            }
+        }
 
         console.log('Clicked clear button after typing');
         await wait(randomDelay(500, 1000));
