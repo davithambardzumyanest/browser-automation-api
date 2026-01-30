@@ -1813,7 +1813,7 @@ const simulateUserActions = async (req, res) => {
                     }
                     
                     // Random delay between actions
-                    await wait(randomDelay(2000, 10000));
+                    await wait(randomDelay(2000, 5000));
                     
                 } catch (error) {
                     console.error('Error during simulation:', error.message);
