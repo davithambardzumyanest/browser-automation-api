@@ -283,12 +283,13 @@ const createSession = async (req, res) => {
         const languageCode = locale.split('-')[0];
         const acceptLanguage = `${locale},${languageCode};q=0.9,en;q=0.8`;
         
-        // Update headers to include correct Accept-Language
-        if (headers) {
-            headers['Accept-Language'] = acceptLanguage;
-        } else {
-            let headers = { 'Accept-Language': acceptLanguage };
+        // Initialize headers if not provided
+        if (!headers) {
+            headers = {};
         }
+        
+        // Update Accept-Language header
+        headers['Accept-Language'] = acceptLanguage;
         
         // Add extra arguments for locale
         launchOptions.args.push(
