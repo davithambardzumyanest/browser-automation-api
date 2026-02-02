@@ -1797,7 +1797,7 @@ async function randomWheelScroll(page) {
 }
 
 async function randomKeyPresses(page) {
-    const keys = ['ArrowDown', 'ArrowUp', 'PageDown', 'PageUp', 'End'];
+    const keys = ['ArrowDown', 'ArrowUp', 'PageDown', 'PageUp', 'End', 'Enter'];
     const presses = randomDelay(1, 3);
     for (let i = 0; i < presses; i++) {
         const key = keys[Math.floor(Math.random() * keys.length)];
@@ -1808,7 +1808,47 @@ async function randomKeyPresses(page) {
     }
 }
 
-// Function to simulate human-like typing with natural variations
+// Function to simulate natural mouse movements during typing
+async function moveMouseNaturally(page, element, durationMs) {
+    const box = await element.boundingBox();
+    if (!box) return;
+    
+    const startX = box.x + box.width / 2;
+    const startY = box.y + box.height / 2;
+    const startTime = Date.now();
+    const endTime = startTime + durationMs;
+    
+    // Define movement boundaries (slightly larger than the element)
+    const padding = Math.min(box.width, box.height) * 0.5;
+    const minX = box.x - padding;
+    const maxX = box.x + box.width + padding;
+    const minY = box.y - padding;
+    const maxY = box.y + box.height + padding;
+    
+    let lastX = startX;
+    let lastY = startY;
+    
+    // Continue moving until time is up
+    while (Date.now() < endTime) {
+        // Calculate new target position within boundaries
+        const targetX = Math.max(minX, Math.min(maxX, lastX + (Math.random() - 0.5) * 40));
+        const targetY = Math.max(minY, Math.min(maxY, lastY + (Math.random() - 0.5) * 20));
+        
+        // Move to new position
+        await page.mouse.move(targetX, targetY, { steps: 3 });
+        
+        // Small random delay
+        await wait(50 + Math.random() * 100);
+        
+        lastX = targetX;
+        lastY = targetY;
+    }
+    
+    // Return to the center of the element
+    await page.mouse.move(startX, startY, { steps: 5 });
+}
+
+// Function to simulate human-like typing with natural variations and mouse movements
 async function humanTypeText(page, element, text) {
     try {
         // First try to focus the element
@@ -1825,9 +1865,16 @@ async function humanTypeText(page, element, text) {
             }
         }
         
+        // Calculate typing duration (2 seconds minimum, up to 10 seconds for longer text)
+        const baseDuration = Math.min(10000, Math.max(2000, text.length * 100));
+        const typingStartTime = Date.now();
+        let lastMouseMoveTime = 0;
+        
         // Type each character with variable speed
         for (let i = 0; i < text.length; i++) {
             const char = text[i];
+            const currentTime = Date.now();
+            const elapsedTime = currentTime - typingStartTime;
             
             // Randomly make typing mistakes (5% chance)
             if (Math.random() < 0.05) {
@@ -1843,8 +1890,29 @@ async function humanTypeText(page, element, text) {
             await page.keyboard.type(char, { delay });
             
             // Random pause between words or sometimes in the middle
-            if ((char === ' ' && Math.random() > 0.7) || Math.random() > 0.95) {
-                await wait(randomDelay(100, 500));
+            const shouldPause = (char === ' ' && Math.random() > 0.7) || Math.random() > 0.95;
+            if (shouldPause) {
+                const pauseTime = randomDelay(100, 500);
+                await wait(pauseTime);
+            }
+            
+            // Add natural mouse movements during typing
+            if (Math.random() > 0.7 && (currentTime - lastMouseMoveTime) > 500) {
+                const remainingTime = Math.max(0, baseDuration - elapsedTime);
+                const movementDuration = Math.min(1000, remainingTime / (text.length - i));
+                if (movementDuration > 200) {
+                    moveMouseNaturally(page, element, movementDuration);
+                    lastMouseMoveTime = Date.now();
+                }
+            }
+            
+            // Adjust typing speed based on remaining time
+            const timePerChar = baseDuration / text.length;
+            const expectedTime = (i + 1) * timePerChar;
+            const actualTime = Date.now() - typingStartTime;
+            
+            if (actualTime < expectedTime) {
+                await wait(expectedTime - actualTime);
             }
         }
     } catch (error) {
@@ -2275,6 +2343,8 @@ const simulateUserActions = async (req, res) => {
                                     // Sometimes clear after typing (20% chance)
                                     if (Math.random() < 0.2) {
                                         await clearGoogleSearch(page);
+                                    } else if (Math.random() < 0.5) {
+                                        await randomKeyPresses(page);
                                     }
                                 } catch (error) {
                                     console.error('Error during typing action:', error.message);
