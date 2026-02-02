@@ -285,7 +285,7 @@ const createSession = async (req, res) => {
         
         // Initialize headers if not provided
         if (!headers) {
-            headers = {};
+            let headers = {};
         }
         
         // Update Accept-Language header
