@@ -301,9 +301,84 @@ const createSession = async (req, res) => {
             launchOptions.args = (launchOptions.args || []).filter(a => a !== '--deny-permission-prompts');
         }
 
+        // Configure viewport settings
+        const viewportWidth = 1920;
+        const viewportHeight = 1080;
+        
+        // Update launch options with viewport settings
+        launchOptions.defaultViewport = {
+            width: viewportWidth,
+            height: viewportHeight,
+            deviceScaleFactor: 1,
+            isMobile: false,
+            hasTouch: false,
+            isLandscape: viewportWidth > viewportHeight
+        };
+
+        // Add additional browser arguments for better stealth
+        launchOptions.args.push(
+            '--disable-blink-features=AutomationControlled',
+            '--disable-blink-features=AutomationControlled',
+            '--disable-infobars',
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-accelerated-2d-canvas',
+            '--no-first-run',
+            '--no-zygote',
+            '--single-process',
+            '--disable-gpu',
+            '--disable-software-rasterizer',
+            '--disable-features=IsolateOrigins,site-per-process',
+            `--window-size=${viewportWidth},${viewportHeight}`
+        );
+
         // Launch browser and create page
         const browser = await puppeteer.launch(launchOptions);
+        const context = browser.defaultBrowserContext();
+
+        // Set up realistic permissions
+        await context.overridePermissions('https://*', [
+            'geolocation',
+            'notifications',
+            'camera',
+            'microphone',
+            'background-sync',
+            'clipboard-read',
+            'clipboard-write',
+            'payment-handler',
+            'autoplay',
+            'fullscreen',
+            'picture-in-picture'
+        ]);
+
         const page = await browser.newPage();
+
+        // Set realistic browser headers
+        const headers = {
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache',
+            'Sec-CH-UA': '"Google Chrome";v="120", "Not A(Brand";v="24", "Chromium";v="120"',
+            'Sec-CH-UA-Mobile': '?0',
+            'Sec-CH-UA-Platform': '"Windows"',
+            'Sec-CH-UA-Platform-Version': '"15.0.0"',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'same-origin',
+            'Sec-Fetch-User': '?1',
+            'Upgrade-Insecure-Requests': '1',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        };
+
+        // Set the headers
+        await page.setExtraHTTPHeaders(headers);
+        await page.setUserAgent(headers['User-Agent']);
+
+        // Set viewport
+        await page.setViewport(launchOptions.defaultViewport);
 
         // If timezone is provided, emulate it
         if (timezone) {
@@ -314,14 +389,97 @@ const createSession = async (req, res) => {
             }
         }
         
-        // Override navigator properties to match the specified locale
+        // Override navigator properties to match the specified locale and enhance realism
         await page.evaluateOnNewDocument((locale, languageCode) => {
-            Object.defineProperty(navigator, 'language', {
-                get: () => locale
+            // Language and locale
+            Object.defineProperty(navigator, 'language', { get: () => locale });
+            Object.defineProperty(navigator, 'languages', { 
+                get: () => [locale, languageCode, 'en-US', 'en'] 
             });
-            Object.defineProperty(navigator, 'languages', {
-                get: () => [locale, languageCode, 'en-US', 'en']
+            
+            // WebDriver detection
+            Object.defineProperty(navigator, 'webdriver', { 
+                get: () => false 
             });
+            
+            // Platform
+            Object.defineProperty(navigator, 'platform', { 
+                get: () => 'Win32' 
+            });
+            
+            // Connection
+            const connection = navigator.connection || {};
+            Object.defineProperty(navigator, 'connection', {
+                get: () => ({
+                    ...connection,
+                    downlink: 10,
+                    effectiveType: '4g',
+                    rtt: 50,
+                    saveData: false,
+                    type: 'wifi'
+                })
+            });
+            
+            // Hardware concurrency
+            Object.defineProperty(navigator, 'hardwareConcurrency', { 
+                value: 8 
+            });
+            
+            // Device memory (in GB)
+            Object.defineProperty(navigator, 'deviceMemory', { 
+                value: 8 
+            });
+            
+            // Max touch points
+            Object.defineProperty(navigator, 'maxTouchPoints', { 
+                value: 0 
+            });
+            
+            // User agent data
+            if ('userAgentData' in navigator) {
+                Object.defineProperty(navigator, 'userAgentData', {
+                    get: () => ({
+                        brands: [
+                            { brand: 'Google Chrome', version: '120' },
+                            { brand: 'Not A;Brand', version: '99' },
+                            { brand: 'Chromium', version: '120' }
+                        ],
+                        mobile: false,
+                        platform: 'Windows'
+                    })
+                });
+            }
+            
+            // WebGL vendor and renderer
+            const getParameter = WebGLRenderingContext.prototype.getParameter;
+            WebGLRenderingContext.prototype.getParameter = function(parameter) {
+                // UNMASKED_VENDOR_WEBGL
+                if (parameter === 37445) {
+                    return 'Google Inc.';
+                }
+                // UNMASKED_RENDERER_WEBGL
+                if (parameter === 37446) {
+                    return 'ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)';
+                }
+                return getParameter(parameter);
+            };
+            
+            // Disable permissions.query function
+            const originalQuery = window.navigator.permissions?.query;
+            if (originalQuery) {
+                window.navigator.permissions.query = (parameters) => (
+                    parameters.name === 'notifications' ? 
+                        Promise.resolve({ state: Notification.permission }) :
+                        originalQuery(parameters)
+                );
+            }
+            
+            // Disable notifications permission request
+            const originalRequestPermission = Notification.requestPermission;
+            Notification.requestPermission = function() {
+                return Promise.resolve('denied');
+            };
+            
         }, locale, languageCode);
 
         // Relay console logs from the page to Node (helps surface evaluateOnNewDocument logs)
