@@ -1513,12 +1513,6 @@ const getRandomDelay = (min, max) => Math.random() * (max - min) + min;
  * @param {boolean} pressEnter - Whether to press Enter after typing
  */
 async function humanType(page, selector, text, pressEnter = false, clearInput = false) {
-    // Random initial delay (like moving mouse to input)
-    await wait(getRandomDelay(200, 800));
-
-    // Focus the input (left click to focus)
-    await page.click(selector, { delay: getRandomDelay(30, 100) });
-
     // Conditionally clear the input if requested
     if (clearInput) {
         try {
@@ -1538,7 +1532,7 @@ async function humanType(page, selector, text, pressEnter = false, clearInput = 
                 }
             }, selector);
         }
-        await wait(getRandomDelay(50, 120));
+        await wait(getRandomDelay(50, 100));
     }
 
     // Type per-character with higher delay for slower, human-like typing
@@ -1546,7 +1540,7 @@ async function humanType(page, selector, text, pressEnter = false, clearInput = 
 
     // Optionally press Enter
     if (pressEnter) {
-        await wait(getRandomDelay(1000, 2500));
+        await wait(getRandomDelay(100, 250));
         await page.keyboard.press('Enter');
     }
 }
@@ -1601,7 +1595,7 @@ const fillInput = async (req, res) => {
         }, selector);
         
         // Add a small delay after scrolling
-        await new Promise(resolve => setTimeout(resolve, getRandomDelay(300, 800)));
+        await new Promise(resolve => setTimeout(resolve, getRandomDelay(50, 150)));
         
         // Type the text with human-like behavior, honoring clearInput flag
         await humanType(page, selector, text, pressEnter, clearInput);
