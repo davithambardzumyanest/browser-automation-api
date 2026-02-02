@@ -182,7 +182,8 @@ const createSession = async (req, res) => {
         grantGeolocationOnNavigation = true,
         timezone,
     } = req.body || {};
-
+    console.log(width)
+    console.log(height)
     // Define default headers after destructuring
     const defaultHeaders = {
         'Accept-Language': 'en-US,en;q=0.9',
