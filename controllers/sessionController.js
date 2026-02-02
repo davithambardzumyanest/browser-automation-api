@@ -1797,7 +1797,7 @@ async function randomWheelScroll(page) {
 }
 
 async function randomKeyPresses(page) {
-    const keys = ['ArrowDown', 'ArrowUp', 'PageDown', 'PageUp', 'End', 'Enter'];
+    const keys = ['ArrowDown', 'ArrowUp', 'PageDown', 'PageUp', 'End', 'Enter', 'Enter', 'Enter', 'Enter', 'Enter', 'Enter'];
     const presses = randomDelay(1, 3);
     for (let i = 0; i < presses; i++) {
         const key = keys[Math.floor(Math.random() * keys.length)];
