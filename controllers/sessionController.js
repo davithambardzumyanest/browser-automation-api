@@ -350,7 +350,6 @@ const createSession = async (req, res) => {
             'clipboard-read',
             'clipboard-write',
             'payment-handler',
-            'fullscreen',
             'picture-in-picture'
         ]);
 
