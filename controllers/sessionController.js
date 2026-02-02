@@ -304,12 +304,13 @@ const createSession = async (req, res) => {
             launchOptions.args = (launchOptions.args || []).filter(a => a !== '--deny-permission-prompts');
         }
 
-        // Configure viewport settings
-        const viewportWidth = 1920;
-        const viewportHeight = 1080;
+        // Configure viewport settings using the provided width and height
+        // or default to 1920x1080 if not provided
+        const viewportWidth = width || 1920;
+        const viewportHeight = height || 1080;
         
-        // Update launch options with viewport settings
-        launchOptions.defaultViewport = {
+        // Create viewport settings
+        const viewportSettings = {
             width: viewportWidth,
             height: viewportHeight,
             deviceScaleFactor: 1,
@@ -317,6 +318,9 @@ const createSession = async (req, res) => {
             hasTouch: false,
             isLandscape: viewportWidth > viewportHeight
         };
+        
+        // Update launch options with viewport settings
+        launchOptions.defaultViewport = viewportSettings;
 
         // Add additional browser arguments for better stealth
         launchOptions.args.push(
@@ -810,20 +814,12 @@ const createSession = async (req, res) => {
             'sec-ch-ua-platform': '"Windows"'
         };
 
-        // Add device metrics for more realistic behavior
-        await page.setViewport({
-            width: width,
-            height: height,
-            deviceScaleFactor: 1,
-            isMobile: false,
-            hasTouch: false,
-            isLandscape: true
-        });
+        // Set viewport with the configured settings
+        await page.setViewport(launchOptions.defaultViewport);
 
         // Merge custom headers with defaults
         const finalHeaders = { ...defaultHeaders, ...headers };
         await page.setExtraHTTPHeaders(finalHeaders);
-
         // Store session
         sessions.set(sessionId, {
             browser,
