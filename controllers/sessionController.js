@@ -812,8 +812,8 @@ const createSession = async (req, res) => {
 
         // Add device metrics for more realistic behavior
         await page.setViewport({
-            width: 1920,
-            height: 1080,
+            width: width,
+            height: height,
             deviceScaleFactor: 1,
             isMobile: false,
             hasTouch: false,
