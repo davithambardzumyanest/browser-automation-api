@@ -350,7 +350,6 @@ const createSession = async (req, res) => {
             'clipboard-read',
             'clipboard-write',
             'payment-handler',
-            'picture-in-picture'
         ]);
 
         const page = await browser.newPage();
