@@ -161,7 +161,29 @@ const createSession = async (req, res) => {
     const defaultSlowMo = parseInt(process.env.DEFAULT_SLOWMO || '0', 10);
     const defaultDevtools = process.env.DEFAULT_DEVTOOLS === 'true' ? true : false;
 
-    // Create a deep copy of the default headers
+    // First destructure without the headers
+    const {
+        headless = defaultHeadless,
+        width = 1920,
+        height = 1080,
+        userAgent = getRandomUserAgent(),
+        headers: headersParam,
+        userDataDir,
+        profileId,
+        locale = 'en-US',
+        proxy,
+        slowMo = defaultSlowMo,
+        devtools = defaultDevtools,
+        stealth = true,
+        allowMedia = false,
+        geolocation,
+        geolocationOrigin,
+        geolocationOrigins,
+        grantGeolocationOnNavigation = true,
+        timezone,
+    } = req.body || {};
+
+    // Define default headers after destructuring
     const defaultHeaders = {
         'Accept-Language': 'en-US,en;q=0.9',
         'Accept-Encoding': 'gzip, deflate, br',
@@ -175,26 +197,8 @@ const createSession = async (req, res) => {
         'Cache-Control': 'max-age=0'
     };
 
-    const {
-        headless = defaultHeadless,
-        width = 1920,
-        height = 1080,
-        userAgent = getRandomUserAgent(),
-        headers: headersParam = { ...defaultHeaders },
-        userDataDir,
-        profileId,
-        locale = 'en-US',
-        proxy,
-        slowMo = defaultSlowMo,
-        devtools = defaultDevtools,
-        stealth = true,
-        allowMedia = false,
-        geolocation, // { latitude: number, longitude: number, accuracy?: number }
-        geolocationOrigin, // e.g. "https://example.com" (back-compat)
-        geolocationOrigins, // e.g. ["https://example.com", "https://maps.google.com"]
-        grantGeolocationOnNavigation = true,
-        timezone, // e.g., 'America/New_York'
-    } = req.body;
+    // Use default headers if none provided
+    const headers = headersParam ? { ...headersParam } : { ...defaultHeaders };
     
     const browserArgs = [...BROWSER_ARGS];
 
@@ -286,12 +290,8 @@ const createSession = async (req, res) => {
         const languageCode = locale.split('-')[0];
         const acceptLanguage = `${locale},${languageCode};q=0.9,en;q=0.8`;
         
-        // Create a new headers object based on the provided headers or default headers
-        const headers = {
-            ...defaultHeaders,
-            ...headersParam,
-            'Accept-Language': acceptLanguage
-        };
+        // Update Accept-Language in headers
+        headers['Accept-Language'] = acceptLanguage;
         
         // Add extra arguments for locale
         launchOptions.args.push(
