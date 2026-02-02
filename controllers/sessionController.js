@@ -287,7 +287,7 @@ const createSession = async (req, res) => {
         if (headers) {
             headers['Accept-Language'] = acceptLanguage;
         } else {
-            headers = { 'Accept-Language': acceptLanguage };
+            let headers = { 'Accept-Language': acceptLanguage };
         }
         
         // Add extra arguments for locale
