@@ -2562,7 +2562,7 @@ async function acceptGoogleCookies(page) {
         // English
         'Accept all', 'Accept all cookies', 'Accept all settings', 'Acceptér alle',
         // French
-        'Tout accepter', 'Tout accepter et continuer',
+        'Tout accepter', 'Tout accepter et continuer', 'Zaakceptuj wszystko',
         // German
         'Alle akzeptieren', 'Alle Cookies akzeptieren',
         // Spanish
