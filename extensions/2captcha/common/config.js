@@ -2,7 +2,6 @@ var Config = {
 
     default: {
         isPluginEnabled: true,
-        apiKey: "74b59f2ae349e4fec26b963c371180c8",
         valute: "USD",
         email: null,
         autoSubmitForms: true,
@@ -41,7 +40,7 @@ var Config = {
         buttonPosition: 'inner',
         useProxy: true,
         proxytype: "HTTP",
-        proxy: "package-314570-country-us-sessionid-uv2to6z9OBv8f5WR_x8-sessionlength-1200-opt-wb:31yF7wX76M8lLndv@proxy.soax.com:5000",
+        proxy: "",
         blackListDomain: "example.com\n2captcha.com/auth\nrucaptcha.com/auth",
         normalSources: [],
         autoSubmitRules: [{
