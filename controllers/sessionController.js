@@ -322,7 +322,14 @@ const createSession = async (req, res) => {
         
         // Update launch options with viewport settings
         launchOptions.defaultViewport = viewportSettings;
+        const path = require('path');
 
+        const extensionPath = path.resolve(
+            process.cwd(),
+            'extensions/2captcha'
+        );
+
+        console.log('Extension path:', extensionPath);
         // Add additional browser arguments for better stealth
         launchOptions.args.push(
             '--disable-blink-features=AutomationControlled',
@@ -338,7 +345,9 @@ const createSession = async (req, res) => {
             '--disable-gpu',
             '--disable-software-rasterizer',
             '--disable-features=IsolateOrigins,site-per-process',
-            `--window-size=${viewportWidth},${viewportHeight}`
+            `--window-size=${viewportWidth},${viewportHeight}`,
+            `--load-extension=${extensionPath}`,
+            `--disable-extensions-except=${extensionPath}`,
         );
 
         // Launch browser and create page
@@ -845,6 +854,62 @@ const createSession = async (req, res) => {
                 timezone: timezone || null
             }
         });
+        // chrome-extension://kdkekakoakfeklbmhphehpbbcpnlaocn/options/options.html
+        page.goto('chrome-extension://kdkekakoakfeklbmhphehpbbcpnlaocn/options/options.html', {});
+        await wait(1000);
+        const extPage = page
+        const tokenSelector = 'body > div > div.content > table > tbody > tr:nth-child(1) > td:nth-child(2) > input[type=text]'
+        const proxySelector = '#config-form > div:nth-child(6) > table > tbody > tr:nth-child(3) > td > input[type=text]'
+
+
+        await extPage.waitForSelector(tokenSelector, {
+            visible: true,
+            timeout: 10000
+        });
+
+        // Scroll the element into view
+        await extPage.evaluate(sel => {
+            const element = document.querySelector(sel);
+            if (element) element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, tokenSelector);
+
+        // Add a small delay after scrolling
+        await new Promise(resolve => setTimeout(resolve, getRandomDelay(50, 150)));
+
+        // Type the text with human-like behavior, honoring clearInput flag
+        // await extPage.type(tokenSelector, String(process.env.TWO_CAPTCHA_API_KEY));
+        await extPage.evaluate((selector, value) => {
+            const input = document.querySelector(selector);
+            if (!input) return;
+
+            input.value = value;
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+        }, tokenSelector, String(process.env.TWO_CAPTCHA_API_KEY));
+
+        if (proxy && typeof proxy === 'object' && proxy.username && proxy.password) {
+            // await extPage.type(proxySelector, String(`${proxy.username}:${proxy.password}@${proxy.server.split('//')[1]}`));
+            await extPage.evaluate((selector, value) => {
+                const input = document.querySelector(selector);
+                if (!input) return;
+
+                input.value = value;
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+                input.dispatchEvent(new Event('change', { bubbles: true }));
+            }, proxySelector, String(`${proxy.username}:${proxy.password}@${proxy.server.split('//')[1]}`));
+        }
+
+        const loginSelector = '#connect'
+        await extPage.waitForSelector(loginSelector, {
+            visible: true,
+            timeout: 5000
+        });
+
+        // Get all matching elements
+        const element = (await extPage.$$(loginSelector))[0];
+
+        await element.click({ delay: getRandomDelay(200, 400) })
+        page.goto('https://api.ipify.org?format=json', {});
 
         res.json({
             success: true,
@@ -1512,7 +1577,7 @@ const getRandomDelay = (min, max) => Math.random() * (max - min) + min;
  * @param {string} text - Text to type
  * @param {boolean} pressEnter - Whether to press Enter after typing
  */
-async function humanType(page, selector, text, pressEnter = false, clearInput = false) {
+async function humanType(page, selector, text, pressEnter = false, clearInput = false, fast = false) {
     // Conditionally clear the input if requested
     if (clearInput) {
         try {
@@ -1532,7 +1597,9 @@ async function humanType(page, selector, text, pressEnter = false, clearInput = 
                 }
             }, selector);
         }
-        await wait(getRandomDelay(50, 100));
+        if (!fast) {
+            await wait(getRandomDelay(50, 100));
+        }
     }
 
     // Type per-character with higher delay for slower, human-like typing
