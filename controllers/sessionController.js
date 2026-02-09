@@ -185,8 +185,9 @@ const configure2CaptchaDirectly = async (page, options = {}) => {
             return new Promise((resolve) => {
                 // Check if Config object is available
                 if (typeof Config !== 'undefined' && Config.set) {
+                    console.log('✅ Config object found, using Config.set()');
                     Config.set(config).then(() => {
-                        console.log(' Configuration set via Config.set()');
+                        console.log('✅ Configuration set via Config.set()');
                         resolve({ success: true });
                     }).catch(err => {
                         console.error('Config.set() error:', err);
@@ -195,16 +196,18 @@ const configure2CaptchaDirectly = async (page, options = {}) => {
                 } else {
                     // Try chrome.storage.local directly
                     if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+                        console.log('✅ Chrome storage available, using direct storage');
                         chrome.storage.local.set({ config: config }, () => {
                             if (chrome.runtime.lastError) {
                                 console.error('Chrome storage error:', chrome.runtime.lastError);
                                 resolve({ success: false, error: chrome.runtime.lastError.message });
                             } else {
-                                console.log(' Configuration set via chrome.storage');
+                                console.log('✅ Configuration set via chrome.storage');
                                 resolve({ success: true });
                             }
                         });
                     } else {
+                        console.error('❌ Chrome APIs not available');
                         resolve({ success: false, error: 'Chrome APIs not available' });
                     }
                 }
@@ -218,7 +221,12 @@ const configure2CaptchaDirectly = async (page, options = {}) => {
                 : "",
             isPluginEnabled: true,
             autoSolveRecaptchaV2: true,
-            autoSolveInvisibleRecaptchaV2: true
+            autoSolveInvisibleRecaptchaV2: true,
+            // Add additional default settings to prevent recaptcha errors
+            enabledForRecaptchaV3: false,
+            recaptchaV3MinScore: 0.3,
+            repeatOnErrorTimes: 2,
+            repeatOnErrorDelay: 1000
         });
         
         if (result.success) {
@@ -337,7 +345,7 @@ const configure2CaptchaEndpoint = async (req, res) => {
 };
 
 /**
- * Diagnose 2Captcha extension issues
+ * Enhanced diagnostic function to check for recaptcha errors
  * @param {Object} page - Puppeteer page object
  * @returns {Promise<Object>} Diagnostic results
  */
@@ -349,7 +357,9 @@ const diagnose2Captcha = async (page) => {
         configAccessible: false,
         apiKeySet: false,
         proxyEnabled: false,
-        errors: []
+        errors: [],
+        recaptchaObjectFound: false,
+        configObjectFound: false
     };
 
     try {
@@ -367,32 +377,73 @@ const diagnose2Captcha = async (page) => {
         }
 
         if (diagnostics.extensionLoaded) {
-            // Check if Config object is available
+            // Check for recaptcha object and other global objects
             try {
-                const configCheck = await page.evaluate(() => {
-                    return {
-                        configExists: typeof Config !== 'undefined',
-                        storageExists: typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local,
-                        configValues: typeof Config !== 'undefined' ? {
-                            apiKey: Config.default.apiKey,
-                            useProxy: Config.default.useProxy,
-                            proxy: Config.default.proxy ? 'SET' : 'NOT_SET'
-                        } : null
+                const globalCheck = await page.evaluate(() => {
+                    const results = {
+                        configObjectFound: typeof Config !== 'undefined',
+                        recaptchaObjectFound: typeof recaptcha !== 'undefined',
+                        grecaptchaObjectFound: typeof grecaptcha !== 'undefined',
+                        chromeStorageAvailable: typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local,
+                        chromeRuntimeAvailable: typeof chrome !== 'undefined' && chrome.runtime,
+                        windowConfig: window.config || null,
+                        documentRecaptcha: !!document.querySelector('[data-sitekey], .g-recaptcha, #recaptcha')
                     };
+                    
+                    // Try to get current config
+                    if (typeof Config !== 'undefined') {
+                        try {
+                            results.currentConfig = Config.default || {};
+                            results.apiKeySet = !!(results.currentConfig.apiKey);
+                            results.useProxy = results.currentConfig.useProxy || false;
+                        } catch (configErr) {
+                            results.configError = configErr.message;
+                        }
+                    }
+                    
+                    return results;
                 });
 
-                diagnostics.configAccessible = configCheck.configExists || configCheck.storageExists;
+                diagnostics.configObjectFound = globalCheck.configObjectFound;
+                diagnostics.recaptchaObjectFound = globalCheck.recaptchaObjectFound;
+                diagnostics.grecaptchaObjectFound = globalCheck.grecaptchaObjectFound;
+                diagnostics.chromeStorageAvailable = globalCheck.chromeStorageAvailable;
+                diagnostics.chromeRuntimeAvailable = globalCheck.chromeRuntimeAvailable;
+                diagnostics.documentRecaptcha = globalCheck.documentRecaptcha;
                 
-                if (configCheck.configValues) {
-                    diagnostics.apiKeySet = !!configCheck.configValues.apiKey;
-                    diagnostics.proxyEnabled = configCheck.configValues.useProxy;
-                    console.log('📋 Config values:', configCheck.configValues);
+                if (globalCheck.configError) {
+                    diagnostics.errors.push(`Config object error: ${globalCheck.configError}`);
+                }
+                
+                if (globalCheck.currentConfig) {
+                    diagnostics.apiKeySet = globalCheck.currentConfig.apiKeySet;
+                    diagnostics.proxyEnabled = globalCheck.currentConfig.useProxy;
                 }
 
-                console.log('✅ Configuration system accessible');
+                console.log('📋 Global objects check:', {
+                    configObjectFound: globalCheck.configObjectFound,
+                    recaptchaObjectFound: globalCheck.recaptchaObjectFound,
+                    grecaptchaObjectFound: globalCheck.grecaptchaObjectFound,
+                    chromeStorageAvailable: globalCheck.chromeStorageAvailable,
+                    chromeRuntimeAvailable: globalCheck.chromeRuntimeAvailable
+                });
+
+                if (globalCheck.configObjectFound) {
+                    console.log('✅ Configuration system accessible');
+                    diagnostics.configAccessible = true;
+                } else {
+                    diagnostics.errors.push('Config object not found');
+                    console.log('❌ Configuration system not accessible');
+                }
+
+                // Check for recaptcha-specific issues
+                if (!globalCheck.recaptchaObjectFound && !globalCheck.grecaptchaObjectFound && globalCheck.documentRecaptcha) {
+                    diagnostics.errors.push('No recaptcha objects found on page - extension may not be active');
+                }
+
             } catch (err) {
-                diagnostics.errors.push(`Config check failed: ${err.message}`);
-                console.log('❌ Configuration system not accessible');
+                diagnostics.errors.push(`Global check failed: ${err.message}`);
+                console.log('❌ Global check failed');
             }
 
             // Try to read current stored configuration
@@ -417,7 +468,9 @@ const diagnose2Captcha = async (page) => {
                     console.log('📦 Stored configuration found:', {
                         apiKey: storedConfig.apiKey ? '***SET***' : 'NOT_SET',
                         useProxy: storedConfig.useProxy,
-                        proxySet: !!storedConfig.proxy
+                        proxySet: !!storedConfig.proxy,
+                        enabledForRecaptchaV2: storedConfig.enabledForRecaptchaV2,
+                        autoSolveRecaptchaV2: storedConfig.autoSolveRecaptchaV2
                     });
                 } else {
                     diagnostics.errors.push(`Stored config error: ${storedConfig.error}`);
@@ -438,7 +491,8 @@ const diagnose2Captcha = async (page) => {
                             } else {
                                 resolve({ 
                                     backgroundPageAccessible: !!bgPage,
-                                    apiInitialized: bgPage && typeof bgPage.API !== 'undefined'
+                                    apiInitialized: bgPage && typeof bgPage.API !== 'undefined',
+                                    hasTwoCaptchaAPI: bgPage && bgPage.API && typeof bgPage.API.solve !== 'undefined'
                                 });
                             }
                         });
@@ -450,6 +504,9 @@ const diagnose2Captcha = async (page) => {
 
             if (!bgStatus.error) {
                 console.log('🔧 Background script status:', bgStatus);
+                if (bgStatus.hasTwoCaptchaAPI) {
+                    console.log('✅ 2Captcha API initialized in background script');
+                }
             } else {
                 diagnostics.errors.push(`Background script error: ${bgStatus.error}`);
             }
