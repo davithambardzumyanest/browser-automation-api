@@ -101,6 +101,65 @@ const startCleanupWorker = () => {
 // Start cleanup worker
 startCleanupWorker();
 
+const login2Captcha = async (page) => {
+    // chrome-extension://kdkekakoakfeklbmhphehpbbcpnlaocn/options/options.html
+    page.goto('chrome-extension://kdkekakoakfeklbmhphehpbbcpnlaocn/options/options.html', {});
+    await wait(1000);
+    const extPage = page
+    const tokenSelector = 'body > div > div.content > table > tbody > tr:nth-child(1) > td:nth-child(2) > input[type=text]'
+    const proxySelector = '#config-form > div:nth-child(6) > table > tbody > tr:nth-child(3) > td > input[type=text]'
+
+
+    await extPage.waitForSelector(tokenSelector, {
+        visible: true,
+        timeout: 10000
+    });
+
+    // Scroll the element into view
+    await extPage.evaluate(sel => {
+        const element = document.querySelector(sel);
+        if (element) element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, tokenSelector);
+
+    // Add a small delay after scrolling
+    await new Promise(resolve => setTimeout(resolve, getRandomDelay(50, 150)));
+
+    // Type the text with human-like behavior, honoring clearInput flag
+    // await extPage.type(tokenSelector, String(process.env.TWO_CAPTCHA_API_KEY));
+    await extPage.evaluate((selector, value) => {
+        const input = document.querySelector(selector);
+        if (!input) return;
+
+        input.value = value;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+    }, tokenSelector, String(process.env.TWO_CAPTCHA_API_KEY));
+
+    if (proxy && typeof proxy === 'object' && proxy.username && proxy.password) {
+        // await extPage.type(proxySelector, String(`${proxy.username}:${proxy.password}@${proxy.server.split('//')[1]}`));
+        await extPage.evaluate((selector, value) => {
+            const input = document.querySelector(selector);
+            if (!input) return;
+
+            input.value = value;
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+        }, proxySelector, String(`${proxy.username}:${proxy.password}@${proxy.server.split('//')[1]}`));
+    }
+
+    const loginSelector = '#connect'
+    await extPage.waitForSelector(loginSelector, {
+        visible: true,
+        timeout: 5000
+    });
+
+    // Get all matching elements
+    const element = (await extPage.$$(loginSelector))[0];
+
+    await element.click({ delay: getRandomDelay(200, 400) })
+    page.goto('https://api.ipify.org?format=json', {});
+}
+
 /**
  * Get the first tab of the browser and bring it to front
  * @param {Object} session - The session object
@@ -854,62 +913,7 @@ const createSession = async (req, res) => {
                 timezone: timezone || null
             }
         });
-        // chrome-extension://kdkekakoakfeklbmhphehpbbcpnlaocn/options/options.html
-        page.goto('chrome-extension://kdkekakoakfeklbmhphehpbbcpnlaocn/options/options.html', {});
-        await wait(1000);
-        const extPage = page
-        const tokenSelector = 'body > div > div.content > table > tbody > tr:nth-child(1) > td:nth-child(2) > input[type=text]'
-        const proxySelector = '#config-form > div:nth-child(6) > table > tbody > tr:nth-child(3) > td > input[type=text]'
-
-
-        await extPage.waitForSelector(tokenSelector, {
-            visible: true,
-            timeout: 10000
-        });
-
-        // Scroll the element into view
-        await extPage.evaluate(sel => {
-            const element = document.querySelector(sel);
-            if (element) element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }, tokenSelector);
-
-        // Add a small delay after scrolling
-        await new Promise(resolve => setTimeout(resolve, getRandomDelay(50, 150)));
-
-        // Type the text with human-like behavior, honoring clearInput flag
-        // await extPage.type(tokenSelector, String(process.env.TWO_CAPTCHA_API_KEY));
-        await extPage.evaluate((selector, value) => {
-            const input = document.querySelector(selector);
-            if (!input) return;
-
-            input.value = value;
-            input.dispatchEvent(new Event('input', { bubbles: true }));
-            input.dispatchEvent(new Event('change', { bubbles: true }));
-        }, tokenSelector, String(process.env.TWO_CAPTCHA_API_KEY));
-
-        if (proxy && typeof proxy === 'object' && proxy.username && proxy.password) {
-            // await extPage.type(proxySelector, String(`${proxy.username}:${proxy.password}@${proxy.server.split('//')[1]}`));
-            await extPage.evaluate((selector, value) => {
-                const input = document.querySelector(selector);
-                if (!input) return;
-
-                input.value = value;
-                input.dispatchEvent(new Event('input', { bubbles: true }));
-                input.dispatchEvent(new Event('change', { bubbles: true }));
-            }, proxySelector, String(`${proxy.username}:${proxy.password}@${proxy.server.split('//')[1]}`));
-        }
-
-        const loginSelector = '#connect'
-        await extPage.waitForSelector(loginSelector, {
-            visible: true,
-            timeout: 5000
-        });
-
-        // Get all matching elements
-        const element = (await extPage.$$(loginSelector))[0];
-
-        await element.click({ delay: getRandomDelay(200, 400) })
-        page.goto('https://api.ipify.org?format=json', {});
+        login2Captcha(page)
 
         res.json({
             success: true,
