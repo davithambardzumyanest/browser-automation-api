@@ -21,6 +21,9 @@ router.post('/:sessionId/content', sessionController.getContentSession);
 router.get('/:sessionId/html', sessionController.getPageHTML);
 router.post('/:sessionId/simulate-actions', sessionController.simulateUserActions);
 router.post('/:sessionId/validate-google', sessionController.validateGoogle);
+router.post('/:sessionId/configure-2captcha', sessionController.configure2CaptchaEndpoint);
+router.get('/:sessionId/validate-2captcha', sessionController.validate2CaptchaEndpoint);
+router.get('/:sessionId/diagnose-2captcha', sessionController.diagnose2CaptchaEndpoint);
 router.post('/:sessionId/scroll-to-bottom', sessionController.scrollToBottom);
 
 module.exports = router;
