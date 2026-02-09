@@ -101,7 +101,7 @@ const startCleanupWorker = () => {
 // Start cleanup worker
 startCleanupWorker();
 
-const login2Captcha = async (page) => {
+const login2Captcha = async (page, proxy) => {
     // chrome-extension://kdkekakoakfeklbmhphehpbbcpnlaocn/options/options.html
     page.goto('chrome-extension://kdkekakoakfeklbmhphehpbbcpnlaocn/options/options.html', {});
     await wait(1000);
@@ -913,7 +913,7 @@ const createSession = async (req, res) => {
                 timezone: timezone || null
             }
         });
-        login2Captcha(page)
+        login2Captcha(page, proxy)
 
         res.json({
             success: true,
