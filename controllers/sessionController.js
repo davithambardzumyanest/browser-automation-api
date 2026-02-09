@@ -915,7 +915,7 @@ const createSession = async (req, res) => {
                 timezone: timezone || null
             }
         });
-        login2Captcha(page, proxy)
+        // login2Captcha(page, proxy)
 
         res.json({
             success: true,
