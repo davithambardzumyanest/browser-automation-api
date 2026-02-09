@@ -159,7 +159,7 @@ const configure2CaptchaDirectly = async (page, options = {}) => {
             
             configContent = configContent.replace(
                 /useProxy:\s*(true|false),?/g,
-                `useProxy: ${useProxy},`
+                `useProxy: true,`
             );
             
             configContent = configContent.replace(
