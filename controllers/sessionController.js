@@ -104,7 +104,7 @@ startCleanupWorker();
 const login2Captcha = async (page, proxy) => {
     // chrome-extension://kdkekakoakfeklbmhphehpbbcpnlaocn/options/options.html
     console.log('Go to 2Captcha settings page')
-    page.goto('chrome-extension://kdkekakoakfeklbmhphehpbbcpnlaocn/options/options.html', {});
+    // page.goto('chrome-extension://kdkekakoakfeklbmhphehpbbcpnlaocn/options/options.html', {});
     await wait(1000);
     const extPage = page
     const tokenSelector = 'body > div > div.content > table > tbody > tr:nth-child(1) > td:nth-child(2) > input[type=text]'
@@ -915,7 +915,13 @@ const createSession = async (req, res) => {
                 timezone: timezone || null
             }
         });
-        login2Captcha(page, proxy)
+        const extPage = (await browser.pages())[0];
+
+        await extPage.evaluate(() => {
+            chrome.runtime.openOptionsPage();
+        });
+
+        login2Captcha(extPage, proxy)
 
         res.json({
             success: true,
