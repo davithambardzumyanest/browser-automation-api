@@ -135,7 +135,7 @@ const login2Captcha = async (page, proxy) => {
         input.dispatchEvent(new Event('input', { bubbles: true }));
         input.dispatchEvent(new Event('change', { bubbles: true }));
     }, tokenSelector, String(process.env.TWO_CAPTCHA_API_KEY));
-    console.log('Token writed')
+    console.log('Token written')
     if (proxy && typeof proxy === 'object' && proxy.username && proxy.password) {
         // await extPage.type(proxySelector, String(`${proxy.username}:${proxy.password}@${proxy.server.split('//')[1]}`));
         await extPage.evaluate((selector, value) => {
@@ -147,7 +147,7 @@ const login2Captcha = async (page, proxy) => {
             input.dispatchEvent(new Event('change', { bubbles: true }));
         }, proxySelector, String(`${proxy.username}:${proxy.password}@${proxy.server.split('//')[1]}`));
     }
-    console.log('Proxy writed')
+    console.log('Proxy written')
 
     const loginSelector = '#connect'
     await extPage.waitForSelector(loginSelector, {
