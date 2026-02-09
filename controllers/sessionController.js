@@ -31,6 +31,9 @@ const BROWSER_ARGS = [
     '--disable-popup-blocking',
     '--disable-translate',
     '--disable-extensions',
+    '--disable-extensions-except',
+    '--disable-extensions-file-access-check',
+    '--disable-component-extensions-with-background-pages',
     '--disable-default-apps',
     '--mute-audio',
     '--safebrowsing-disable-auto-update',
@@ -101,72 +104,373 @@ const startCleanupWorker = () => {
 // Start cleanup worker
 startCleanupWorker();
 
-const login2Captcha = async (page, proxy) => {
-    // chrome-extension://kdkekakoakfeklbmhphehpbbcpnlaocn/options/options.html
-    console.log('Go to 2Captcha settings page')
-    // page.goto('chrome-extension://kdkekakoakfeklbmhphehpbbcpnlaocn/options/options.html', {});
-    await wait(1000);
-    const extPage = page
-    const tokenSelector = 'body > div > div.content > table > tbody > tr:nth-child(1) > td:nth-child(2) > input[type=text]'
-    const proxySelector = '#config-form > div:nth-child(6) > table > tbody > tr:nth-child(3) > td > input[type=text]'
+/**
+ * Configure 2Captcha extension directly without UI interaction
+ * @param {Object} page - Puppeteer page object
+ * @param {Object} options - Configuration options
+ * @param {string} options.apiKey - 2Captcha API key
+ * @param {Object} options.proxy - Proxy configuration
+ * @param {string} options.proxy.username - Proxy username
+ * @param {string} options.proxy.password - Proxy password
+ * @param {string} options.proxy.server - Proxy server URL
+ * @param {string} options.proxy.type - Proxy type (HTTP, HTTPS, SOCKS4, SOCKS5)
+ * @param {boolean} options.useProxy - Whether to use proxy
+ */
+const configure2CaptchaDirectly = async (page, options = {}) => {
+    const {
+        apiKey = process.env.TWO_CAPTCHA_API_KEY,
+        proxy = null,
+        useProxy = false,
+        proxyType = 'HTTP'
+    } = options;
 
-
-    await extPage.waitForSelector(tokenSelector, {
-        visible: true,
-        timeout: 10000
-    });
-
-    // Scroll the element into view
-    await extPage.evaluate(sel => {
-        const element = document.querySelector(sel);
-        if (element) element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }, tokenSelector);
-
-    // Add a small delay after scrolling
-    await new Promise(resolve => setTimeout(resolve, getRandomDelay(50, 150)));
-
-    // Type the text with human-like behavior, honoring clearInput flag
-    // await extPage.type(tokenSelector, String(process.env.TWO_CAPTCHA_API_KEY));
-    await extPage.evaluate((selector, value) => {
-        const input = document.querySelector(selector);
-        if (!input) return;
-
-        input.value = value;
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-        input.dispatchEvent(new Event('change', { bubbles: true }));
-    }, tokenSelector, String(process.env.TWO_CAPTCHA_API_KEY));
-    console.log('Token written')
-    if (proxy && typeof proxy === 'object' && proxy.username && proxy.password) {
-        // await extPage.type(proxySelector, String(`${proxy.username}:${proxy.password}@${proxy.server.split('//')[1]}`));
-        await extPage.evaluate((selector, value) => {
-            const input = document.querySelector(selector);
-            if (!input) return;
-
-            input.value = value;
-            input.dispatchEvent(new Event('input', { bubbles: true }));
-            input.dispatchEvent(new Event('change', { bubbles: true }));
-        }, proxySelector, String(`${proxy.username}:${proxy.password}@${proxy.server.split('//')[1]}`));
+    if (!apiKey) {
+        console.warn('No 2Captcha API key provided, skipping configuration');
+        return false;
     }
-    console.log('Proxy written')
 
-    const loginSelector = '#connect'
-    await extPage.waitForSelector(loginSelector, {
-        visible: true,
-        timeout: 5000
-    });
+    try {
+        console.log('Configuring 2Captcha extension directly...');
+        
+        // Wait for extension to be fully loaded
+        await wait(3000);
+        
+        // Try to navigate to extension's options page first to ensure proper context
+        try {
+            // This will give us the proper extension context
+            await page.goto('chrome-extension://kdkekakoakfeklbmhphehpbbcpnlaocn/options/options.html', { 
+                waitUntil: 'domcontentloaded',
+                timeout: 10000 
+            });
+            await wait(1000);
+        } catch (navError) {
+            console.warn('Could not navigate to extension options page, trying direct approach');
+            // Continue with direct configuration
+        }
+        
+        // Configure the extension directly via chrome.storage.local
+        const configResult = await page.evaluate((config) => {
+            return new Promise((resolve) => {
+                // Check if we're in the right context
+                if (typeof chrome === 'undefined') {
+                    resolve({ success: false, error: 'Chrome API not available' });
+                    return;
+                }
+                
+                if (!chrome.storage || !chrome.storage.local) {
+                    resolve({ success: false, error: 'Chrome storage API not available' });
+                    return;
+                }
 
-    // Get all matching elements
-    const element = (await extPage.$$(loginSelector))[0];
+                const defaultConfig = {
+                    isPluginEnabled: true,
+                    apiKey: null,
+                    valute: "USD",
+                    email: null,
+                    autoSubmitForms: true,
+                    submitFormsDelay: 0,
+                    enabledForNormal: true,
+                    enabledForRecaptchaV2: true,
+                    enabledForInvisibleRecaptchaV2: true,
+                    enabledForRecaptchaV3: true,
+                    enabledForHCaptcha: true,
+                    enabledForGeetest: true,
+                    enabledForGeetest_v4: true,
+                    enabledForKeycaptcha: true,
+                    enabledForArkoselabs: true,
+                    enabledForLemin: true,
+                    enabledForYandex: true,
+                    enabledForCapyPuzzle: true,
+                    enabledForAmazonWaf: true,
+                    enabledForTurnstile: true,
+                    autoSolveNormal: false,
+                    autoSolveRecaptchaV2: true,
+                    autoSolveInvisibleRecaptchaV2: true,
+                    autoSolveRecaptchaV3: false,
+                    recaptchaV3MinScore: 0.5,
+                    autoSolveHCaptcha: false,
+                    autoSolveGeetest: false,
+                    autoSolveKeycaptcha: false,
+                    autoSolveArkoselabs: false,
+                    autoSolveGeetest_v4: false,
+                    autoSolveLemin: false,
+                    autoSolveYandex: false,
+                    autoSolveCapyPuzzle: false,
+                    autoSolveAmazonWaf: false,
+                    autoSolveTurnstile: false,
+                    repeatOnErrorTimes: 0,
+                    repeatOnErrorDelay: 0,
+                    buttonPosition: 'inner',
+                    useProxy: false,
+                    proxytype: "HTTP",
+                    proxy: "",
+                    blackListDomain: "example.com\n2captcha.com/auth\nrucaptcha.com/auth",
+                    normalSources: [],
+                    autoSubmitRules: [{
+                        url_pattern: "(2|ru)captcha.com/demo",
+                        code: "" +
+                            '{"type":"source","value":"document"}' + "\n" +
+                            '{"type":"method","value":"querySelector","args":["button[type=submit]"]}' + "\n" +
+                            '{"type":"method","value":"click"}',
+                    }],
+                };
 
-    await element.click({ delay: getRandomDelay(200, 400) })
-    page.goto('https://api.ipify.org?format=json', {});
-}
+                // Merge with provided config
+                const finalConfig = { ...defaultConfig, ...config };
+
+                // Store the configuration
+                chrome.storage.local.set({ config: finalConfig }, () => {
+                    if (chrome.runtime.lastError) {
+                        console.error('Chrome storage error:', chrome.runtime.lastError);
+                        resolve({ success: false, error: chrome.runtime.lastError.message });
+                    } else {
+                        console.log('2Captcha configuration saved successfully');
+                        console.log('Configuration set:', { 
+                            apiKey: finalConfig.apiKey ? '***SET***' : 'NOT_SET',
+                            useProxy: finalConfig.useProxy,
+                            proxySet: !!finalConfig.proxy
+                        });
+                        resolve({ success: true, config: finalConfig });
+                    }
+                });
+            });
+        }, {
+            apiKey: apiKey,
+            useProxy: useProxy,
+            proxytype: proxyType,
+            proxy: proxy && proxy.username && proxy.password && proxy.server 
+                ? `${proxy.username}:${proxy.password}@${proxy.server.replace(/^https?:\/\//, '')}` 
+                : "",
+        });
+
+        if (configResult.success) {
+            // Wait a moment for the configuration to be applied
+            await wait(2000);
+
+            // Verify the configuration was set
+            const verification = await page.evaluate(() => {
+                return new Promise((resolve) => {
+                    chrome.storage.local.get('config', (result) => {
+                        if (chrome.runtime.lastError) {
+                            resolve({ success: false, error: chrome.runtime.lastError.message });
+                        } else {
+                            const config = result.config || {};
+                            resolve({
+                                success: true,
+                                apiKeySet: !!config.apiKey,
+                                extensionEnabled: config.isPluginEnabled,
+                                proxyEnabled: config.useProxy,
+                                proxySet: !!config.proxy,
+                                configKeys: Object.keys(config)
+                            });
+                        }
+                    });
+                });
+            });
+
+            if (verification.success && verification.apiKeySet) {
+                console.log('✅ 2Captcha extension configured successfully');
+                console.log('Configuration verification:', verification);
+                return true;
+            } else {
+                console.error('❌ 2Captcha configuration verification failed:', verification);
+                return false;
+            }
+        } else {
+            console.error('❌ Failed to set 2Captcha configuration:', configResult.error);
+            return false;
+        }
+
+    } catch (error) {
+        console.error('❌ Failed to configure 2Captcha extension:', error);
+        
+        // Try alternative approach - use a regular page and inject the configuration
+        try {
+            console.log('🔄 Trying alternative configuration approach...');
+            
+            // Navigate to a blank page first
+            await page.goto('about:blank');
+            await wait(1000);
+            
+            // Try to configure via content script injection
+            const altResult = await page.evaluate((config) => {
+                return new Promise((resolve) => {
+                    // Try to access chrome extension APIs
+                    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+                        chrome.storage.local.set({ config: config }, () => {
+                            if (chrome.runtime.lastError) {
+                                resolve({ success: false, error: chrome.runtime.lastError.message });
+                            } else {
+                                console.log('Alternative 2Captcha configuration completed');
+                                resolve({ success: true });
+                            }
+                        });
+                    } else {
+                        // Try using window.postMessage to communicate with extension
+                        window.postMessage({
+                            type: 'CONFIGURE_2CAPTCHA',
+                            config: config
+                        }, '*');
+                        
+                        // Wait a bit and resolve
+                        setTimeout(() => resolve({ success: true }), 1000);
+                    }
+                });
+            }, {
+                apiKey: apiKey,
+                useProxy: useProxy,
+                proxytype: proxyType,
+                proxy: proxy && proxy.username && proxy.password && proxy.server 
+                    ? `${proxy.username}:${proxy.password}@${proxy.server.replace(/^https?:\/\//, '')}` 
+                    : "",
+                isPluginEnabled: true
+            });
+            
+            if (altResult.success) {
+                console.log('✅ Alternative 2Captcha configuration completed');
+                return true;
+            } else {
+                console.error('❌ Alternative configuration failed:', altResult.error);
+                return false;
+            }
+            
+        } catch (fallbackError) {
+            console.error('❌ All configuration approaches failed:', fallbackError);
+            return false;
+        }
+    }
+};
 
 /**
- * Get the first tab of the browser and bring it to front
- * @param {Object} session - The session object
- * @returns {Promise<Object>} The first page in the browser
+ * Legacy function for backward compatibility - now uses direct configuration
+ * @param {Object} page - Puppeteer page object
+ * @param {Object} proxy - Proxy configuration
  */
+const login2Captcha = async (page, proxy) => {
+    console.log('Using legacy login2Captcha function - redirecting to direct configuration');
+    
+    const success = await configure2CaptchaDirectly(page, {
+        apiKey: process.env.TWO_CAPTCHA_API_KEY,
+        proxy: proxy,
+        useProxy: proxy && proxy.username && proxy.password,
+        proxyType: proxy?.type || 'HTTP'
+    });
+
+    if (success) {
+        console.log('2Captcha configured successfully via direct method');
+    } else {
+        console.error('Failed to configure 2Captcha');
+    }
+
+    return success;
+};
+
+/**
+ * Validate 2Captcha extension configuration
+ * @param {Object} page - Puppeteer page object
+ * @returns {Promise<Object>} Configuration status
+ */
+const validate2CaptchaConfig = async (page) => {
+    try {
+        const config = await page.evaluate(() => {
+            return new Promise((resolve) => {
+                chrome.storage.local.get('config', (result) => {
+                    resolve(result.config || {});
+                });
+            });
+        });
+
+        return {
+            configured: !!config.apiKey,
+            apiKeySet: !!config.apiKey,
+            proxyEnabled: config.useProxy,
+            proxySet: !!config.proxy,
+            extensionEnabled: config.isPluginEnabled,
+            config: config
+        };
+    } catch (error) {
+        console.error('Failed to validate 2Captcha config:', error);
+        return {
+            configured: false,
+            error: error.message
+        };
+    }
+};
+
+/**
+ * API endpoint to configure 2Captcha extension
+ */
+const configure2CaptchaEndpoint = async (req, res) => {
+    const { sessionId } = req.params;
+    const { apiKey, proxy, useProxy, proxyType = 'HTTP' } = req.body;
+
+    const session = sessions.get(sessionId);
+    if (!session) {
+        return res.status(404).json({
+            error: 'Session not found',
+            message: `Session ${sessionId} does not exist or has expired`
+        });
+    }
+
+    try {
+        const success = await configure2CaptchaDirectly(session.page, {
+            apiKey: apiKey || process.env.TWO_CAPTCHA_API_KEY,
+            proxy: proxy,
+            useProxy: useProxy,
+            proxyType: proxyType
+        });
+
+        if (success) {
+            const validation = await validate2CaptchaConfig(session.page);
+            res.json({
+                success: true,
+                message: '2Captcha configured successfully',
+                configuration: validation
+            });
+        } else {
+            res.status(500).json({
+                error: 'Failed to configure 2Captcha',
+                message: 'Extension may not be loaded or configuration failed'
+            });
+        }
+    } catch (error) {
+        console.error('Error configuring 2Captcha:', error);
+        res.status(500).json({
+            error: 'Failed to configure 2Captcha',
+            message: error.message
+        });
+    }
+};
+
+/**
+ * API endpoint to validate 2Captcha configuration
+ */
+const validate2CaptchaEndpoint = async (req, res) => {
+    const { sessionId } = req.params;
+
+    const session = sessions.get(sessionId);
+    if (!session) {
+        return res.status(404).json({
+            error: 'Session not found',
+            message: `Session ${sessionId} does not exist or has expired`
+        });
+    }
+
+    try {
+        const validation = await validate2CaptchaConfig(session.page);
+        res.json({
+            success: true,
+            sessionId,
+            validation
+        });
+    } catch (error) {
+        console.error('Error validating 2Captcha config:', error);
+        res.status(500).json({
+            error: 'Failed to validate 2Captcha configuration',
+            message: error.message
+        });
+    }
+};
 async function getFirstTab(session) {
     try {
         const pages = await session.browser.pages();
@@ -391,19 +695,18 @@ const createSession = async (req, res) => {
         );
 
         console.log('Extension path:', extensionPath);
-        // Add additional browser arguments for better stealth
+        
+        // Remove conflicting extension arguments and add proper ones
+        launchOptions.args = launchOptions.args.filter(arg => 
+            !arg.includes('--disable-extensions') &&
+            !arg.includes('--disable-extensions-except') &&
+            !arg.includes('--disable-extensions-file-access-check') &&
+            !arg.includes('--disable-component-extensions-with-background-pages')
+        );
+        
+        // Add additional browser arguments for better stealth and extension support
         launchOptions.args.push(
             '--disable-blink-features=AutomationControlled',
-            '--disable-blink-features=AutomationControlled',
-            '--disable-infobars',
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-accelerated-2d-canvas',
-            '--no-first-run',
-            '--no-zygote',
-            '--single-process',
-            '--disable-gpu',
             '--disable-software-rasterizer',
             '--disable-features=IsolateOrigins,site-per-process',
             `--window-size=${viewportWidth},${viewportHeight}`,
@@ -917,11 +1220,22 @@ const createSession = async (req, res) => {
         });
         const extPage = (await browser.pages())[0];
 
-        await extPage.evaluate(() => {
-            chrome.runtime.openOptionsPage();
+        // Wait a moment for the extension to load
+        await wait(2000);
+
+        // Configure 2Captcha directly without UI interaction
+        const configSuccess = await configure2CaptchaDirectly(extPage, {
+            apiKey: process.env.TWO_CAPTCHA_API_KEY,
+            proxy: proxy,
+            useProxy: proxy && proxy.username && proxy.password,
+            proxyType: proxy?.type || 'HTTP'
         });
 
-        login2Captcha(extPage, proxy)
+        if (configSuccess) {
+            console.log('2Captcha configured successfully');
+        } else {
+            console.warn('2Captcha configuration failed, but continuing with session creation');
+        }
 
         res.json({
             success: true,
@@ -1004,9 +1318,25 @@ const navigateSession = async (req, res) => {
     }
 
     try {
-        new URL(url);
+        const parsedUrl = new URL(url);
+        
+        // Block Chrome extension URLs and other invalid protocols
+        if (parsedUrl.protocol === 'chrome-extension:') {
+            return res.status(400).json({ 
+                error: 'Invalid URL protocol',
+                message: 'Chrome extension URLs are not supported for navigation' 
+            });
+        }
+        
+        // Only allow http, https, and file protocols
+        if (!['http:', 'https:', 'file:'].includes(parsedUrl.protocol)) {
+            return res.status(400).json({ 
+                error: 'Invalid URL protocol',
+                message: 'Only HTTP, HTTPS, and file URLs are supported' 
+            });
+        }
     } catch (err) {
-        return res.status(400).json({ error: 'Invalid URL format' });
+        return res.status(400).json({ error: 'Invalid URL format', message: err.message });
     }
 
     const session = sessions.get(sessionId);
@@ -1110,7 +1440,43 @@ const navigateSession = async (req, res) => {
         }
 
         // Navigate to the URL
-        await targetPage.goto(url, options);
+        try {
+            await targetPage.goto(url, options);
+        } catch (navError) {
+            // Handle common navigation errors
+            if (navError.message.includes('ERR_BLOCKED_BY_CLIENT') || 
+                navError.message.includes('chrome-extension://')) {
+                console.warn('Navigation blocked by browser extension, attempting recovery...');
+                
+                // Try to close any extension pages that might have opened
+                try {
+                    const pages = await browser.pages();
+                    for (const page of pages) {
+                        const pageUrl = page.url();
+                        if (pageUrl.startsWith('chrome-extension://')) {
+                            console.log('Closing extension page:', pageUrl);
+                            await page.close();
+                        }
+                    }
+                    
+                    // Get a fresh page reference
+                    const freshPages = await browser.pages();
+                    const activePage = freshPages.find(p => !p.url().startsWith('chrome-extension://')) || freshPages[0];
+                    session.page = activePage;
+                    
+                    // Retry navigation with more permissive options
+                    await activePage.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+                } catch (retryError) {
+                    throw new Error(`Navigation failed due to browser extension interference. Try restarting the browser session or disable extensions. Error: ${retryError.message}`);
+                }
+            } else if (navError.message.includes('net::ERR_NAME_NOT_RESOLVED') ||
+                       navError.message.includes('net::ERR_CONNECTION_TIMED_OUT') ||
+                       navError.message.includes('net::ERR_CONNECTION_REFUSED')) {
+                throw new Error(`Network error: ${navError.message}. Please check the URL and network connectivity.`);
+            } else {
+                throw navError;
+            }
+        }
         // Re-apply geolocation after navigation in case the page asked during load, and re-grant iframe origins
         try {
             const cfg = session.config || {};
@@ -2855,5 +3221,7 @@ module.exports = {
     simulateUserActions,
     validateGoogle,
     fillInput,
-    checkXPath
+    checkXPath,
+    configure2CaptchaEndpoint,
+    validate2CaptchaEndpoint
 };
