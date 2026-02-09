@@ -103,6 +103,7 @@ startCleanupWorker();
 
 const login2Captcha = async (page, proxy) => {
     // chrome-extension://kdkekakoakfeklbmhphehpbbcpnlaocn/options/options.html
+    console.log('Go to 2Captcha settings page')
     page.goto('chrome-extension://kdkekakoakfeklbmhphehpbbcpnlaocn/options/options.html', {});
     await wait(1000);
     const extPage = page
@@ -134,7 +135,7 @@ const login2Captcha = async (page, proxy) => {
         input.dispatchEvent(new Event('input', { bubbles: true }));
         input.dispatchEvent(new Event('change', { bubbles: true }));
     }, tokenSelector, String(process.env.TWO_CAPTCHA_API_KEY));
-
+    console.log('Token writed')
     if (proxy && typeof proxy === 'object' && proxy.username && proxy.password) {
         // await extPage.type(proxySelector, String(`${proxy.username}:${proxy.password}@${proxy.server.split('//')[1]}`));
         await extPage.evaluate((selector, value) => {
@@ -146,6 +147,7 @@ const login2Captcha = async (page, proxy) => {
             input.dispatchEvent(new Event('change', { bubbles: true }));
         }, proxySelector, String(`${proxy.username}:${proxy.password}@${proxy.server.split('//')[1]}`));
     }
+    console.log('Proxy writed')
 
     const loginSelector = '#connect'
     await extPage.waitForSelector(loginSelector, {
