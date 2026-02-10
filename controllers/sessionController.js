@@ -1306,6 +1306,8 @@ const createSession = async (req, res) => {
             useProxy: proxy && proxy.username && proxy.password,
             proxyType: proxy?.type || 'HTTP'
         });
+        console.log('Number of pages:', (await browser.pages()).length);
+        console.log('Current URL of first page:', extPage.url());
 
         res.json({
             success: true,
