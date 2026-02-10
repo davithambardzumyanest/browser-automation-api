@@ -7,14 +7,44 @@ importScripts(
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === 'SET_CONFIG') {
-        // Use the extension's own Config object
-        if (typeof Config !== 'undefined' && Config.set) {
-            Config.set(msg.config)
-                .then(() => sendResponse({ success: true }))
-                .catch(err => sendResponse({ success: false, error: err.message }));
-        } else {
-            sendResponse({ success: false, error: 'Config object not found' });
-        }
-        return true; // keep the message channel open for async response
+        (async () => {
+            // Wait until Config is ready
+            let retries = 10;
+            while (
+                (typeof Config === 'undefined' ||
+                    !Config.get ||
+                    !Config.set) &&
+                retries-- > 0
+                ) {
+                await new Promise(r => setTimeout(r, 300));
+            }
+
+            if (!Config || !Config.set) {
+                sendResponse({ success: false, error: 'Config not initialized' });
+                return;
+            }
+
+            // Get existing config first
+            const current = await Config.get();
+
+            // Deep-merge to avoid undefined sub-objects
+            const safeConfig = {
+                ...current,
+                ...msg.config,
+                recaptcha: {
+                    ...(current?.recaptcha || {}),
+                    ...(msg.config?.recaptcha || {})
+                }
+            };
+
+            try {
+                await Config.set(safeConfig);
+                sendResponse({ success: true });
+            } catch (e) {
+                sendResponse({ success: false, error: e.message });
+            }
+        })();
+
+        return true; // keep async channel open
     }
 });
