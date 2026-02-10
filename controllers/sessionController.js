@@ -157,10 +157,10 @@ const preConfigure2Captcha = async (options = {}) => {
 const configure2CaptchaDirectly = async (page, options = {}) => {
     const proxy = options.proxy;
 
-    return await page.evaluate((cfg) => {
+    return await page.evaluate((cfg, extId) => {
         return new Promise(resolve => {
             chrome.runtime.sendMessage(
-                options.extId,
+                extId,
                 { type: 'SET_CONFIG', config: cfg },
                 res => resolve(res)
             );
@@ -168,7 +168,6 @@ const configure2CaptchaDirectly = async (page, options = {}) => {
     }, {
         apiKey: process.env.TWO_CAPTCHA_API_KEY,
         isPluginEnabled: true,
-
         recaptcha: {
             enabled: true,
             autoSolveV2: true,
@@ -181,7 +180,7 @@ const configure2CaptchaDirectly = async (page, options = {}) => {
         proxy: proxy && proxy.username && proxy.password && proxy.server
             ? `${proxy.username}:${proxy.password}@${proxy.server.replace(/^https?:\/\//, '')}`
             : "",
-    });
+    }, options.extId);
 };
 
 
