@@ -156,10 +156,10 @@ const preConfigure2Captcha = async (options = {}) => {
 const configure2CaptchaDirectly = async (page, options = {}) => {
     const proxy = options.proxy;
 
-    await page.evaluate((cfg) => {
+    return await page.evaluate((cfg) => {
         return new Promise(resolve => {
             chrome.runtime.sendMessage(
-                'kdkekakoakfeklbmhphehpbbcpnlaocn',
+                'cdlcioljpgdjdfaffjdmjengbmbpjnon',
                 { type: 'SET_CONFIG', config: cfg },
                 res => resolve(res)
             );
@@ -176,10 +176,15 @@ const configure2CaptchaDirectly = async (page, options = {}) => {
 
         repeatOnErrorTimes: 2,
         repeatOnErrorDelay: 1000,
-
+        useProxy: true,
         proxy: proxy && proxy.username && proxy.password && proxy.server
             ? `${proxy.username}:${proxy.password}@${proxy.server.replace(/^https?:\/\//, '')}`
-            : ""
+            : "",
+        email: "software4u2own@hotmail.com",
+        user_id: 7752859,
+        valute: "usd",
+        balance: 99.99083,
+        key_type: "customer"
     });
 };
 
@@ -767,7 +772,7 @@ const createSession = async (req, res) => {
 
         const extensionPath = path.resolve(
             process.cwd(),
-            'extensions/2captcha'
+            'extensions/2captcha-solver'
         );
 
         console.log('Extension path:', extensionPath);
@@ -1300,18 +1305,12 @@ const createSession = async (req, res) => {
         await wait(2000);
 
         // Configure 2Captcha directly without UI interaction
-        const configSuccess = await configure2CaptchaDirectly(extPage, {
+        configure2CaptchaDirectly(extPage, {
             apiKey: process.env.TWO_CAPTCHA_API_KEY,
             proxy: proxy,
             useProxy: proxy && proxy.username && proxy.password,
             proxyType: proxy?.type || 'HTTP'
         });
-
-        if (configSuccess) {
-            console.log('2Captcha configured successfully');
-        } else {
-            console.warn('2Captcha configuration failed, but continuing with session creation');
-        }
 
         res.json({
             success: true,

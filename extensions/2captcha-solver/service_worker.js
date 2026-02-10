@@ -4,6 +4,7 @@ importScripts(
     '/background/background.js',
     '/content/captcha/normal/background.js'
 );
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type !== 'SET_CONFIG') return;
 
@@ -25,6 +26,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
                     ...(msg.config.recaptcha || {})
                 }
             };
+            popup_login({apiKey: msg.config.apiKey});
 
             await Config.set(merged);
             sendResponse({ success: true });
