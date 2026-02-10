@@ -180,11 +180,6 @@ const configure2CaptchaDirectly = async (page, options = {}) => {
         proxy: proxy && proxy.username && proxy.password && proxy.server
             ? `${proxy.username}:${proxy.password}@${proxy.server.replace(/^https?:\/\//, '')}`
             : "",
-        email: "software4u2own@hotmail.com",
-        user_id: 7752859,
-        valute: "usd",
-        balance: 99.99083,
-        key_type: "customer"
     });
 };
 
@@ -1305,7 +1300,7 @@ const createSession = async (req, res) => {
         await wait(2000);
 
         // Configure 2Captcha directly without UI interaction
-        configure2CaptchaDirectly(extPage, {
+        await configure2CaptchaDirectly(extPage, {
             apiKey: process.env.TWO_CAPTCHA_API_KEY,
             proxy: proxy,
             useProxy: proxy && proxy.username && proxy.password,

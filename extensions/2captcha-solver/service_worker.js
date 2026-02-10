@@ -26,9 +26,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
                     ...(msg.config.recaptcha || {})
                 }
             };
-            popup_login({apiKey: msg.config.apiKey});
 
             await Config.set(merged);
+
+            await popup_login({apiKey: msg.config.apiKey});
+
             sendResponse({ success: true });
         } catch (e) {
             sendResponse({ success: false, error: e.message });
