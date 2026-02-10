@@ -159,7 +159,7 @@ const configure2CaptchaDirectly = async (page, options = {}) => {
     return await page.evaluate((cfg) => {
         return new Promise(resolve => {
             chrome.runtime.sendMessage(
-                'cdlcioljpgdjdfaffjdmjengbmbpjnon',
+                options.extId,
                 { type: 'SET_CONFIG', config: cfg },
                 res => resolve(res)
             );
@@ -1304,10 +1304,9 @@ const createSession = async (req, res) => {
             apiKey: process.env.TWO_CAPTCHA_API_KEY,
             proxy: proxy,
             useProxy: proxy && proxy.username && proxy.password,
-            proxyType: proxy?.type || 'HTTP'
+            proxyType: proxy?.type || 'HTTP',
+            extId: extPage.url().split('/')[2]
         });
-        console.log('Number of pages:', (await browser.pages()).length);
-        console.log('Current URL of first page:', extPage.url());
 
         res.json({
             success: true,
