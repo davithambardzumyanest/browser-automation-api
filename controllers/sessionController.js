@@ -154,7 +154,8 @@ const preConfigure2Captcha = async (options = {}) => {
  * @param {string} options.proxyType - Proxy type
  */
 const configure2CaptchaDirectly = async (page, options = {}) => {
-    const proxy = options.proxy
+    const proxy = options.proxy;
+
     await page.evaluate((cfg) => {
         return new Promise(resolve => {
             chrome.runtime.sendMessage(
@@ -166,15 +167,22 @@ const configure2CaptchaDirectly = async (page, options = {}) => {
     }, {
         apiKey: process.env.TWO_CAPTCHA_API_KEY,
         isPluginEnabled: true,
-        autoSolveRecaptchaV2: true,
-        autoSolveInvisibleRecaptchaV2: true,
+
+        recaptcha: {
+            enabled: true,
+            autoSolveV2: true,
+            autoSolveInvisibleV2: true
+        },
+
         repeatOnErrorTimes: 2,
         repeatOnErrorDelay: 1000,
+
         proxy: proxy && proxy.username && proxy.password && proxy.server
             ? `${proxy.username}:${proxy.password}@${proxy.server.replace(/^https?:\/\//, '')}`
             : ""
     });
 };
+
 
 /**
  * Legacy function for backward compatibility - now uses direct configuration
