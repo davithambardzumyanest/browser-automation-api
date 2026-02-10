@@ -154,93 +154,26 @@ const preConfigure2Captcha = async (options = {}) => {
  * @param {string} options.proxyType - Proxy type
  */
 const configure2CaptchaDirectly = async (page, options = {}) => {
-    const {
-        apiKey = process.env.TWO_CAPTCHA_API_KEY,
-        proxy = null,
-        useProxy = false,
-        proxyType = 'HTTP'
-    } = options;
-
-    if (!apiKey) {
-        console.warn('No 2Captcha API key provided, skipping configuration');
-        return false;
-    }
-
-    try {
-        console.log(' Configuring 2Captcha extension using Chrome APIs...');
-        
-        // Wait for extension to be fully loaded
-        await wait(3000);
-        
-        // Navigate to the extension's options page
-        await page.goto('chrome-extension://kdkekakoakfeklbmhphehpbbcpnlaocn/options/options.html', {
-            waitUntil: 'domcontentloaded',
-            timeout: 10000
+    const proxy = options.proxy
+    await page.evaluate((cfg) => {
+        return new Promise(resolve => {
+            chrome.runtime.sendMessage(
+                'kdkekakoakfeklbmhphehpbbcpnlaocn',
+                { type: 'SET_CONFIG', config: cfg },
+                res => resolve(res)
+            );
         });
-        
-        await wait(2000);
-        
-        // Use the extension's own Config.set() method
-        const result = await page.evaluate((config) => {
-            return new Promise((resolve) => {
-                // Check if Config object is available
-                if (typeof Config !== 'undefined' && Config.set) {
-                    console.log('✅ Config object found, using Config.set()');
-                    Config.set(config).then(() => {
-                        console.log('✅ Configuration set via Config.set()');
-                        resolve({ success: true });
-                    }).catch(err => {
-                        console.error('Config.set() error:', err);
-                        resolve({ success: false, error: err.message });
-                    });
-                } else {
-                    // Try chrome.storage.local directly
-                    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
-                        console.log('✅ Chrome storage available, using direct storage');
-                        chrome.storage.local.set({ config: config }, () => {
-                            if (chrome.runtime.lastError) {
-                                console.error('Chrome storage error:', chrome.runtime.lastError);
-                                resolve({ success: false, error: chrome.runtime.lastError.message });
-                            } else {
-                                console.log('✅ Configuration set via chrome.storage');
-                                resolve({ success: true });
-                            }
-                        });
-                    } else {
-                        console.error('❌ Chrome APIs not available');
-                        resolve({ success: false, error: 'Chrome APIs not available' });
-                    }
-                }
-            });
-        }, {
-            apiKey: apiKey,
-            useProxy: useProxy,
-            proxytype: proxyType,
-            proxy: proxy && proxy.username && proxy.password && proxy.server 
-                ? `${proxy.username}:${proxy.password}@${proxy.server.replace(/^https?:\/\//, '')}` 
-                : "",
-            isPluginEnabled: true,
-            autoSolveRecaptchaV2: true,
-            autoSolveInvisibleRecaptchaV2: true,
-            // Add additional default settings to prevent recaptcha errors
-            enabledForRecaptchaV3: false,
-            recaptchaV3MinScore: 0.3,
-            repeatOnErrorTimes: 2,
-            repeatOnErrorDelay: 1000
-        });
-        
-        if (result.success) {
-            console.log(' Extension configured successfully via Chrome APIs');
-            return true;
-        } else {
-            console.warn(' Extension configuration failed:', result.error);
-            return false;
-        }
-        
-    } catch (error) {
-        console.error(' Failed to configure 2Captcha extension:', error);
-        return false;
-    }
+    }, {
+        apiKey: process.env.TWO_CAPTCHA_API_KEY,
+        isPluginEnabled: true,
+        autoSolveRecaptchaV2: true,
+        autoSolveInvisibleRecaptchaV2: true,
+        repeatOnErrorTimes: 2,
+        repeatOnErrorDelay: 1000,
+        proxy: proxy && proxy.username && proxy.password && proxy.server
+            ? `${proxy.username}:${proxy.password}@${proxy.server.replace(/^https?:\/\//, '')}`
+            : ""
+    });
 };
 
 /**
