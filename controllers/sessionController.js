@@ -152,6 +152,7 @@ const preConfigure2Captcha = async (options = {}) => {
  * @param {string} options.proxy.type - Proxy type (HTTP, HTTPS, SOCKS4, SOCKS5)
  * @param {boolean} options.useProxy - Whether to use proxy
  * @param {string} options.proxyType - Proxy type
+ * @param {string} options.extId - String type
  */
 const configure2CaptchaDirectly = async (page, options = {}) => {
     const proxy = options.proxy;
