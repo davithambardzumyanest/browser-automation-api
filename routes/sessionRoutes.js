@@ -11,6 +11,7 @@ router.delete('/', sessionController.closeAllSessions);
 
 // Session operations
 router.post('/:sessionId/goto', sessionController.navigateSession);
+router.post('/:sessionId/refresh', sessionController.refreshSession);
 router.post('/:sessionId/screenshot', sessionController.screenshotSession);
 router.post('/:sessionId/execute', sessionController.executeScriptSession);
 router.post('/:sessionId/click', sessionController.clickSession);
