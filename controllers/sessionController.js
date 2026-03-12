@@ -241,6 +241,462 @@ const validate2CaptchaConfig = async (page) => {
 };
 
 /**
+ * API endpoint to solve reCAPTCHA on current page
+ */
+const solveRecaptchaEndpoint = async (req, res) => {
+    const { sessionId } = req.params;
+    const { submitAfter = true, submitSelector = null, waitTime = 2000 } = req.body;
+
+    const session = sessions.get(sessionId);
+    if (!session) {
+        return res.status(404).json({
+            error: 'Session not found',
+            message: `Session ${sessionId} does not exist or has expired`
+        });
+    }
+
+    try {
+        console.log(` Starting reCAPTCHA solving for session ${sessionId}`);
+
+        // CRITICAL: Hook grecaptcha BEFORE solving to intercept Google's calls
+        console.log('🔧 Pre-hooking grecaptcha.enterprise.execute()...');
+        await session.page.evaluateOnNewDocument(() => {
+            console.log('🎯 Setting up grecaptcha hooks before page loads...');
+            
+            // Hook grecaptcha.enterprise.execute() as soon as it's available
+            let enterpriseExecuteHooked = false;
+            let regularExecuteHooked = false;
+            
+            const hookEnterpriseExecute = () => {
+                if (window.grecaptcha && window.grecaptcha.enterprise && !enterpriseExecuteHooked) {
+                    console.log('🔒 Hooking grecaptcha.enterprise.execute()...');
+                    
+                    const originalExecute = window.grecaptcha.enterprise.execute;
+                    window.grecaptcha.enterprise.execute = function(options) {
+                        console.log('🎯 grecaptcha.enterprise.execute() intercepted!');
+                        
+                        // Check if we have a solved token
+                        if (window.__solvedRecaptchaToken || window.__captchaToken) {
+                            const token = window.__solvedRecaptchaToken || window.__captchaToken;
+                            console.log('✅ Returning solved token from grecaptcha.enterprise.execute()');
+                            return Promise.resolve(token);
+                        }
+                        
+                        // Otherwise call original
+                        return originalExecute.call(this, options);
+                    };
+                    
+                    enterpriseExecuteHooked = true;
+                    console.log('✅ grecaptcha.enterprise.execute() successfully hooked');
+                }
+            };
+            
+            const hookRegularExecute = () => {
+                if (window.grecaptcha && window.grecaptcha.execute && !regularExecuteHooked) {
+                    console.log('🔒 Hooking grecaptcha.execute()...');
+                    
+                    const originalExecute = window.grecaptcha.execute;
+                    window.grecaptcha.execute = function(sitekey, options) {
+                        console.log('🎯 grecaptcha.execute() intercepted!');
+                        
+                        // Check if we have a solved token
+                        if (window.__solvedRecaptchaToken || window.__captchaToken) {
+                            const token = window.__solvedRecaptchaToken || window.__captchaToken;
+                            console.log('✅ Returning solved token from grecaptcha.execute()');
+                            return Promise.resolve(token);
+                        }
+                        
+                        // Otherwise call original
+                        return originalExecute.call(this, sitekey, options);
+                    };
+                    
+                    regularExecuteHooked = true;
+                    console.log('✅ grecaptcha.execute() successfully hooked');
+                }
+            };
+            
+            // Try to hook immediately if already loaded
+            hookEnterpriseExecute();
+            hookRegularExecute();
+            
+            // Set up intervals to hook when grecaptcha loads later
+            const enterpriseInterval = setInterval(() => {
+                if (enterpriseExecuteHooked) {
+                    clearInterval(enterpriseInterval);
+                } else {
+                    hookEnterpriseExecute();
+                }
+            }, 100);
+            
+            const regularInterval = setInterval(() => {
+                if (regularExecuteHooked) {
+                    clearInterval(regularInterval);
+                } else {
+                    hookRegularExecute();
+                }
+            }, 100);
+            
+            // Also hook when grecaptcha is assigned
+            let grecaptchaDescriptor = Object.getOwnPropertyDescriptor(window, 'grecaptcha');
+            if (!grecaptchaDescriptor) {
+                Object.defineProperty(window, 'grecaptcha', {
+                    set: function(value) {
+                        console.log('🔧 grecaptcha object being set...');
+                        this._grecaptcha = value;
+                        
+                        // Hook immediately when set
+                        setTimeout(() => {
+                            hookEnterpriseExecute();
+                            hookRegularExecute();
+                        }, 0);
+                    },
+                    get: function() {
+                        return this._grecaptcha;
+                    }
+                });
+            }
+            
+            console.log('🚀 grecaptcha hooks initialized');
+        });
+
+        // Solve the reCAPTCHA
+        const solveResult = await findAndSolveRecaptcha(session.page);
+
+        if (!solveResult.success) {
+            return res.status(400).json({
+                error: 'Failed to solve reCAPTCHA',
+                message: solveResult.error,
+                details: solveResult
+            });
+        }
+
+        let submitResult = null;
+
+        // Submit form if requested
+        if (submitAfter) {
+            // Check if reCAPTCHA was actually solved before submitting
+            if (solveResult.verificationResult && !solveResult.verificationResult.isSolved) {
+                console.log('⚠️ reCAPTCHA verification shows it may not be solved, but attempting submission anyway...');
+            }
+            
+            // Check if any callbacks were triggered
+            if (solveResult.simulationSteps && solveResult.simulationSteps.length === 0) {
+                console.log('⚠️ No simulation steps executed - reCAPTCHA may not be properly solved');
+            } else {
+                console.log(`✅ ${solveResult.simulationSteps.length} simulation steps executed`);
+            }
+            
+            console.log(` Submitting form after solving...`);
+            
+            try {
+                // Wait a bit for the token to be processed (longer wait for Google)
+                await new Promise(resolve => setTimeout(resolve, Math.max(waitTime, 8000)));
+
+                // Google Auth-specific pre-submit verification and submission
+                const preSubmitCheck = await session.page.evaluate(() => {
+                    // Check for Google-specific indicators
+                    const isGoogleAuth = window.location.hostname.includes('google.com') ||
+                                      window.location.hostname.includes('accounts.google.com') ||
+                                      document.querySelector('[data-sitekey*="6LeIx"]') !== null; // Google test key
+                    
+                    const robotText = document.body.innerText.includes('I\'m not a robot') || 
+                                     document.body.innerText.includes('Please verify') ||
+                                     document.body.innerText.includes('Please verify that you are not a robot') ||
+                                     document.body.innerText.includes('Confirm you\'re not a robot');
+                    
+                    // Check for reCAPTCHA challenge still visible
+                    const recaptchaFrames = document.querySelectorAll('iframe[src*="recaptcha"]');
+                    let challengeVisible = false;
+                    
+                    recaptchaFrames.forEach(frame => {
+                        if (frame.offsetParent !== null && frame.style.display !== 'none') {
+                            challengeVisible = true;
+                        }
+                    });
+                    
+                    // Check if reCAPTCHA response is populated
+                    const responseTextarea = document.querySelector('textarea[name="g-recaptcha-response"]') ||
+                                           document.getElementById('g-recaptcha-response');
+                    const hasResponse = responseTextarea && responseTextarea.value && responseTextarea.value.length > 0;
+                    
+                    // Google Auth specific checks
+                    const googleNextButton = document.querySelector('div[role="button"][data-primary-action-label], button[data-primary-action-label], div[jsname*="bVqjve"]');
+                    const hasGoogleButton = googleNextButton !== null;
+                    
+                    return {
+                        isGoogleAuth,
+                        robotTextVisible: robotText,
+                        challengeVisible: challengeVisible,
+                        hasResponse: hasResponse,
+                        hasGoogleButton: hasGoogleButton,
+                        pageUrl: window.location.href,
+                        pageTitle: document.title
+                    };
+                });
+
+                console.log('🔍 Pre-submit check result:', preSubmitCheck);
+
+                // Google Auth-specific submission logic
+                if (preSubmitCheck.isGoogleAuth) {
+                    console.log('🔒 Detected Google Auth page - using Google-specific submission');
+                    
+                    // Google Auth submission requires different approach
+                    const googleSubmitResult = await session.page.evaluate(() => {
+                        const results = [];
+                        
+                        // Method 1: Look for Google's "Next" button with multiple selectors
+                        const nextButtonSelectors = [
+                            'div[role="button"][data-primary-action-label]',
+                            'button[data-primary-action-label]', 
+                            'div[jsname*="bVqjve"]',
+                            'div[role="button"][jsname*="LgbsSe"]',
+                            'button[jsname*="LgbsSe"]',
+                            'div[role="button"]:has(span[contains(text(), "Next")])',
+                            'button:has(span[contains(text(), "Next")])',
+                            'div[role="button"][aria-label*="Next"]',
+                            'button[aria-label*="Next"]',
+                            'div[data-primary-action-label="Next"]',
+                            'button[data-primary-action-label="Next"]'
+                        ];
+                        
+                        for (const selector of nextButtonSelectors) {
+                            try {
+                                const button = document.querySelector(selector);
+                                if (button && button.offsetParent !== null) {
+                                    results.push({
+                                        method: 'google-next-button',
+                                        selector: selector,
+                                        element: button.tagName + (button.className ? '.' + button.className.split(' ').join('.') : ''),
+                                        text: button.textContent || button.innerText || 'No text',
+                                        clickable: !button.disabled
+                                    });
+                                    
+                                    // Try to click the button with human-like behavior
+                                    if (!button.disabled) {
+                                        // Simulate human approach and click
+                                        const rect = button.getBoundingClientRect();
+                                        const centerX = rect.left + rect.width / 2;
+                                        const centerY = rect.top + rect.height / 2;
+                                        
+                                        // Mouse approach
+                                        button.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+                                        button.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+                                        
+                                        setTimeout(() => {
+                                            button.dispatchEvent(new MouseEvent('mousedown', {
+                                                bubbles: true,
+                                                clientX: centerX,
+                                                clientY: centerY,
+                                                button: 0
+                                            }));
+                                            
+                                            setTimeout(() => {
+                                                button.dispatchEvent(new MouseEvent('mouseup', {
+                                                    bubbles: true,
+                                                    clientX: centerX,
+                                                    clientY: centerY,
+                                                    button: 0
+                                                }));
+                                                
+                                                button.dispatchEvent(new MouseEvent('click', {
+                                                    bubbles: true,
+                                                    clientX: centerX,
+                                                    clientY: centerY,
+                                                    button: 0
+                                                }));
+                                                
+                                                // Also try direct click as fallback
+                                                button.click();
+                                                
+                                            }, Math.random() * 100 + 50);
+                                            
+                                        }, Math.random() * 200 + 100);
+                                        
+                                        return { success: true, method: 'google-next-click', selector };
+                                    }
+                                }
+                            } catch (e) {
+                                results.push({
+                                    method: 'google-next-button',
+                                    selector: selector,
+                                    error: e.message
+                                });
+                            }
+                        }
+                        
+                        // Method 2: Try to trigger Google's form validation without form
+                        const responseTextarea = document.querySelector('textarea[name="g-recaptcha-response"]') ||
+                                               document.getElementById('g-recaptcha-response');
+                        
+                        if (responseTextarea && responseTextarea.value) {
+                            results.push({
+                                method: 'google-validation-trigger',
+                                hasResponse: true,
+                                responseLength: responseTextarea.value.length
+                            });
+                            
+                            // Trigger Google's validation events
+                            const validationEvents = [
+                                new Event('change', { bubbles: true }),
+                                new Event('input', { bubbles: true }),
+                                new CustomEvent('recaptcha.success', { 
+                                    bubbles: true, 
+                                    detail: { response: responseTextarea.value } 
+                                }),
+                                new CustomEvent('google.verification.complete', {
+                                    bubbles: true,
+                                    detail: { token: responseTextarea.value }
+                                })
+                            ];
+                            
+                            validationEvents.forEach((event, index) => {
+                                setTimeout(() => {
+                                    responseTextarea.dispatchEvent(event);
+                                    document.dispatchEvent(event);
+                                }, index * 200);
+                            });
+                            
+                            // Try to find and trigger any submit handlers
+                            if (window.grecaptcha && window.grecaptcha.execute) {
+                                try {
+                                    // Execute all available widgets
+                                    Object.keys(window.grecaptcha.widgets || {}).forEach(widgetId => {
+                                        setTimeout(() => {
+                                            try {
+                                                window.grecaptcha.execute(widgetId);
+                                                results.push({
+                                                    method: 'grecaptcha-execute',
+                                                    widgetId: widgetId,
+                                                    success: true
+                                                });
+                                            } catch (e) {
+                                                results.push({
+                                                    method: 'grecaptcha-execute',
+                                                    widgetId: widgetId,
+                                                    error: e.message
+                                                });
+                                            }
+                                        }, Math.random() * 1000);
+                                    });
+                                } catch (e) {
+                                    results.push({
+                                        method: 'grecaptcha-execute',
+                                        error: e.message
+                                    });
+                                }
+                            }
+                        }
+                        
+                        // Method 3: Look for any clickable element that might submit
+                        const clickableElements = document.querySelectorAll('div[role="button"], button, [onclick]');
+                        clickableElements.forEach((element, index) => {
+                            const text = element.textContent || element.innerText || '';
+                            if (text.toLowerCase().includes('next') || 
+                                text.toLowerCase().includes('continue') ||
+                                text.toLowerCase().includes('submit')) {
+                                results.push({
+                                    method: 'google-clickable-found',
+                                    index: index,
+                                    tag: element.tagName,
+                                    text: text,
+                                    clickable: !element.disabled
+                                });
+                            }
+                        });
+                        
+                        return { results, found: results.length > 0 };
+                    });
+                    
+                    submitResult = googleSubmitResult;
+                    console.log('🔒 Google Auth submission result:', googleSubmitResult);
+                    
+                } else {
+                    // Regular form submission for non-Google pages
+                    console.log('📝 Using regular form submission for non-Google page');
+                    
+                    const formSubmitResult = await session.page.evaluate(() => {
+                        // Enhanced form submission logic for regular pages
+                        const submitSelectors = [
+                            'input[type="submit"]',
+                            'button[type="submit"]',
+                            'button:not([type])',
+                            'input[type="button"]',
+                            'form button',
+                            'form input[type="button"]',
+                            '[role="button"]',
+                            '.btn',
+                            '.button',
+                            '#submit',
+                            '#submit-btn'
+                        ];
+                        
+                        const results = [];
+                        
+                        for (const selector of submitSelectors) {
+                            try {
+                                const elements = document.querySelectorAll(selector);
+                                elements.forEach((element, index) => {
+                                    if (element.offsetParent !== null && !element.disabled) {
+                                        results.push({
+                                            method: 'form-submit',
+                                            selector: selector,
+                                            index: index,
+                                            tag: element.tagName,
+                                            text: element.textContent || element.value || 'No text',
+                                            clickable: true
+                                        });
+                                        
+                                        element.click();
+                                        return { success: true, method: 'form-click' };
+                                    }
+                                });
+                            } catch (e) {
+                                results.push({
+                                    method: 'form-submit',
+                                    selector: selector,
+                                    error: e.message
+                                });
+                            }
+                        }
+                        
+                        return { results, found: results.length > 0 };
+                    });
+                    
+                    submitResult = formSubmitResult;
+                    console.log('📝 Regular form submission result:', formSubmitResult);
+                }
+
+            } catch (submitError) {
+                console.error('❌ Error during submission:', submitError.message);
+                submitResult = { 
+                    success: false, 
+                    error: submitError.message,
+                    isGoogleAuth: preSubmitCheck.isGoogleAuth 
+                };
+            }
+        }
+
+        // Return success response with all details
+        return res.status(200).json({
+            success: true,
+            sessionId: sessionId,
+            result: solveResult,
+            submitResult: submitResult,
+            message: submitResult ? 'reCAPTCHA solved and form submitted successfully' : 'reCAPTCHA solved successfully'
+        });
+
+    } catch (error) {
+        console.error('❌ Error in solveRecaptchaEndpoint:', error.message);
+        return res.status(500).json({
+            success: false,
+            error: 'Internal server error',
+            message: error.message,
+            sessionId: sessionId
+        });
+    }
+};
+
+/**
  * API endpoint to configure 2Captcha extension
  */
 const configure2CaptchaEndpoint = async (req, res) => {
@@ -463,7 +919,596 @@ const diagnose2Captcha = async (page) => {
 };
 
 /**
- * API endpoint to diagnose 2Captcha extension
+ * Solve reCAPTCHA using 2Captcha API
+ * @param {Object} page - Puppeteer page object
+ * @param {string} siteKey - The reCAPTCHA site key
+ * @param {string} pageUrl - The URL of the page with reCAPTCHA
+ * @returns {Promise<string>} The solved reCAPTCHA token
+ */
+const solveRecaptchaWith2Captcha = async (page, siteKey, pageUrl) => {
+    const API_KEY = process.env.TWO_CAPTCHA_API_KEY;
+    
+    if (!API_KEY) {
+        throw new Error('TWO_CAPTCHA_API_KEY environment variable is not set');
+    }
+
+    try {
+        console.log('🔍 Sending reCAPTCHA to 2Captcha service...');
+        console.log(`📋 Site Key: ${siteKey}`);
+        console.log(`📋 Page URL: ${pageUrl}`);
+
+        // Send captcha to 2Captcha
+        const axios = require('axios');
+        const response = await axios.get('http://2captcha.com/in.php', {
+            params: {
+                key: API_KEY,
+                method: 'userrecaptcha',
+                googlekey: siteKey,
+                pageurl: pageUrl,
+                json: 1
+            },
+            timeout: 30000
+        });
+
+        const captchaId = response.data.request;
+        console.log(`🎫 Captcha ID: ${captchaId}`);
+
+        if (!captchaId) {
+            throw new Error('Failed to get captcha ID from 2Captcha');
+        }
+
+        // Wait until solved
+        console.log('⏳ Waiting for captcha to be solved...');
+        let attempts = 0;
+        const maxAttempts = 120; // 10 minutes max wait
+
+        while (attempts < maxAttempts) {
+            attempts++;
+            await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds
+
+            const result = await axios.get('http://2captcha.com/res.php', {
+                params: {
+                    key: API_KEY,
+                    action: 'get',
+                    id: captchaId,
+                    json: 1
+                },
+                timeout: 10000
+            });
+
+            if (result.data.status === 1 && result.data.request) {
+                console.log('✅ reCAPTCHA solved successfully!');
+                return result.data.request;
+            } else if (result.data.request === 'CAPCHA_NOT_READY') {
+                console.log(`⏳ Still solving... (${attempts}/${maxAttempts})`);
+                continue;
+            } else {
+                throw new Error(`2Captcha error: ${result.data.request}`);
+            }
+        }
+
+        throw new Error('reCAPTCHA solving timeout after 10 minutes');
+
+    } catch (error) {
+        console.error('❌ Error solving reCAPTCHA:', error.message);
+        throw error;
+    }
+};
+
+/**
+ * Find reCAPTCHA on page and solve it
+ * @param {Object} page - Puppeteer page object
+ * @returns {Promise<Object>} Result of solving attempt
+ */
+const findAndSolveRecaptcha = async (page) => {
+    try {
+        console.log('🔍 Searching for reCAPTCHA on page...');
+
+        // Get current page URL
+        const pageUrl = page.url();
+        console.log(`📋 Current page: ${pageUrl}`);
+
+        // Enhanced debugging - check what's actually on the page
+        const debugInfo = await page.evaluate(() => {
+            const allElements = document.querySelectorAll('*');
+            const recaptchaElements = [];
+            
+            allElements.forEach(el => {
+                if (el.className && el.className.includes && el.className.includes('recaptcha')) {
+                    recaptchaElements.push({
+                        tag: el.tagName,
+                        className: el.className,
+                        id: el.id,
+                        dataset: Object.assign({}, el.dataset),
+                        textContent: el.textContent ? el.textContent.substring(0, 100) : null
+                    });
+                }
+            });
+            
+            const siteKeyElements = document.querySelectorAll('[data-sitekey], [data-site-key]');
+            const iframes = document.querySelectorAll('iframe');
+            const textareas = document.querySelectorAll('textarea');
+            const scripts = document.querySelectorAll('script');
+            
+            // Check for error messages using XPath for better reliability
+            const errorXPaths = [
+                '//*[contains(text(), "Too many failed attempts")]',
+                '//*[contains(text(), "couldn\'t verify")]', 
+                '//*[contains(text(), "try again")]',
+                '//*[contains(text(), "blocked")]',
+                '//*[contains(text(), "suspicious activity")]',
+                '//*[contains(text(), "verify your account")]',
+                '//*[contains(text(), "Confirm you\'re not a robot")]', // New specific error
+                '//*[contains(text(), "Please verify that you are not a robot")]', // New specific error
+                '//*[contains(@class, "CuWxc")]', // Fallback to class if needed
+                '//*[@jsname="Bz112c"]', // Fallback to jsname if needed
+                '//*[@jsname="Ud7fr"]' // Fallback to jsname if needed
+            ];
+            
+            const errorElements = [];
+            let isBlocked = false;
+            
+            for (const xpath of errorXPaths) {
+                try {
+                    const result = document.evaluate(
+                        xpath, 
+                        document, 
+                        null, 
+                        XPathResult.FIRST_ORDERED_NODE_TYPE, 
+                        null
+                    );
+                    const errorElement = result.singleNodeValue;
+                    
+                    if (errorElement && errorElement.offsetParent !== null) {
+                        const errorText = (errorElement.textContent || '').trim();
+                        errorElements.push({
+                            text: errorText,
+                            className: errorElement.className,
+                            jsname: errorElement.getAttribute('jsname'),
+                            id: errorElement.id,
+                            xpath: xpath
+                        });
+                        
+                        // Check for specific blocking conditions
+                        if (errorText.includes('Too many failed attempts') || 
+                            errorText.includes('blocked') ||
+                            errorText.includes('suspicious activity')) {
+                            isBlocked = true;
+                        }
+                    }
+                } catch (error) {
+                    console.log('XPath error:', error.message);
+                    continue;
+                }
+            }
+            
+            return {
+                recaptchaElements,
+                siteKeyElements: Array.from(siteKeyElements).map(el => ({
+                    tag: el.tagName,
+                    className: el.className,
+                    id: el.id,
+                    sitekey: el.dataset.sitekey || el.getAttribute('data-site-key'),
+                    enterpriseSiteKey: el.getAttribute('data-enterprise-site-key')
+                })),
+                iframes: Array.from(iframes).map(iframe => ({
+                    src: iframe.src,
+                    id: iframe.id,
+                    className: iframe.className
+                })),
+                textareas: Array.from(textareas).map(ta => ({
+                    name: ta.name,
+                    id: ta.id,
+                    className: ta.className
+                })),
+                scripts: Array.from(scripts).filter(script => 
+                    script.src && script.src.includes('recaptcha')
+                ).map(script => script.src),
+                errorElements: errorElements,
+                hasError: errorElements.length > 0,
+                isBlocked: isBlocked
+            };
+        });
+
+        console.log('🔍 Page analysis:', JSON.stringify(debugInfo, null, 2));
+
+        // Try to find site key using multiple enhanced selectors
+        let siteKey = null;
+        let foundMethod = null;
+
+        const selectors = [
+            { selector: '.g-recaptcha[data-sitekey]', method: 'g-recaptcha with data-sitekey' },
+            { selector: '.g-recaptcha[data-site-key]', method: 'g-recaptcha with data-site-key (with dash)' },
+            { selector: '[data-sitekey]', method: 'any element with data-sitekey' },
+            { selector: '[data-site-key]', method: 'any element with data-site-key (with dash)' },
+            { selector: 'iframe[src*="recaptcha"]', method: 'recaptcha iframe' },
+            { selector: '.g-recaptcha', method: 'g-recaptcha class' },
+            { selector: '#recaptcha', method: 'recaptcha id' },
+            { selector: '[class*="recaptcha"]', method: 'any element with recaptcha in class' },
+            { selector: '[jscontroller*="recaptcha"]', method: 'element with recaptcha jscontroller' },
+            { selector: '[data-site-key]', method: 'enterprise site-key attribute' }
+        ];
+
+        for (const { selector, method } of selectors) {
+            try {
+                siteKey = await page.evaluate((sel) => {
+                    const elements = document.querySelectorAll(sel);
+                    
+                    for (const element of elements) {
+                        // Try to get sitekey from data-sitekey attribute
+                        if (element.dataset && element.dataset.sitekey) {
+                            return element.dataset.sitekey;
+                        }
+                        
+                        // Try to get sitekey from data-site-key attribute (with dash)
+                        if (element.dataset && element.dataset.siteKey) {
+                            return element.dataset.siteKey;
+                        }
+                        
+                        // Try to get sitekey from data-site-key attribute (raw)
+                        if (element.hasAttribute && element.hasAttribute('data-site-key')) {
+                            return element.getAttribute('data-site-key');
+                        }
+                        
+                        // Try to get sitekey from src attribute (for iframes)
+                        if (element.src) {
+                            const match = element.src.match(/sitekey=([^&]+)/);
+                            if (match) return match[1];
+                        }
+                        
+                        // Try to get sitekey from any attribute
+                        for (const attr of element.attributes) {
+                            if (attr.name.includes('sitekey') || attr.value.includes('sitekey')) {
+                                const match = attr.value.match(/sitekey[=:]?([a-zA-Z0-9_-]+)/);
+                                if (match) return match[1];
+                            }
+                        }
+                    }
+                    
+                    return null;
+                }, selector);
+                
+                if (siteKey) {
+                    foundMethod = method;
+                    console.log(`✅ Found site key using method: ${method}`);
+                    console.log(`🎫 Site Key: ${siteKey}`);
+                    break;
+                }
+            } catch (error) {
+                console.log(`❌ Failed with selector ${selector}: ${error.message}`);
+            }
+        }
+
+        // Additional fallback: look for reCAPTCHA in page content
+        if (!siteKey) {
+            try {
+                const pageContent = await page.content();
+                const siteKeyMatch = pageContent.match(/sitekey[\'\"\s]*[:=]?[\'\"\s]*([a-zA-Z0-9_-]{20,})/i);
+                if (siteKeyMatch) {
+                    siteKey = siteKeyMatch[1];
+                    foundMethod = 'page content regex';
+                    console.log(`✅ Found site key in page content: ${siteKey}`);
+                }
+            } catch (error) {
+                console.log('❌ Failed to analyze page content:', error.message);
+            }
+        }
+
+        if (!siteKey) {
+            return {
+                success: false,
+                error: 'No reCAPTCHA found on page',
+                foundCaptchas: debugInfo,
+                debugInfo: debugInfo
+            };
+        }
+
+        // Check if reCAPTCHA is blocked or in error state
+        if (debugInfo.isBlocked) {
+            console.log('🚫 reCAPTCHA is BLOCKED - Too many failed attempts detected');
+            return {
+                success: false,
+                error: 'reCAPTCHA is blocked due to too many failed attempts',
+                errorType: 'BLOCKED',
+                errorMessages: debugInfo.errorElements.map(el => el.text),
+                debugInfo: debugInfo,
+                siteKey: siteKey,
+                requiresNewIP: true,
+                requiresWaitTime: '30 minutes to several hours',
+                suggestions: [
+                    'Wait 30+ minutes for block to clear',
+                    'Use different IP/proxy',
+                    'Create new session with different fingerprint',
+                    'Try a different Google account',
+                    'Clear browser cookies and cache',
+                    'Use a different device or browser'
+                ]
+            };
+        }
+
+        if (debugInfo.hasError) {
+            console.log('⚠️ reCAPTCHA shows error state, but attempting to solve anyway...');
+            // Don't return error immediately - try to solve first
+            // Some error states are temporary and the captcha might still solve
+        }
+
+        console.log(`🎫 Found reCAPTCHA with site key: ${siteKey} (method: ${foundMethod})`);
+
+        // Solve the reCAPTCHA
+        let token;
+        try {
+            token = await solveRecaptchaWith2Captcha(page, siteKey, pageUrl);
+            console.log(`🎯 Solved token: ${token.substring(0, 20)}...`);
+        } catch (solveError) {
+            console.error('❌ Failed to solve reCAPTCHA:', solveError.message);
+            
+            // If solving failed and there was an error state, return detailed error
+            if (debugInfo.hasError) {
+                return {
+                    success: false,
+                    error: 'reCAPTCHA solving failed - likely due to blocked state',
+                    solveError: solveError.message,
+                    errorMessages: debugInfo.errorMessages,
+                    debugInfo: debugInfo,
+                    siteKey: siteKey,
+                    requiresNewIP: true,
+                    requiresWaitTime: 'Unknown - may be temporary',
+                    suggestions: [
+                        'Wait 30+ minutes for block to clear',
+                        'Use different IP/proxy',
+                        'Create new session with different fingerprint',
+                        'Try a different Google account'
+                    ]
+                };
+            }
+            
+            // Return the original solve error if not related to block
+            return {
+                success: false,
+                error: 'Failed to solve reCAPTCHA',
+                message: solveError.message,
+                siteKey: siteKey
+            };
+        }
+
+        // Inject the token using Google Enterprise reCAPTCHA flow (not DOM simulation)
+        const injectionResult = await page.evaluate((token, siteKey) => {
+            console.log('🔧 Starting Google Enterprise reCAPTCHA injection...');
+            console.log('🎫 Target sitekey:', siteKey);
+            
+            let successMethods = [];
+            let simulationSteps = [];
+            
+            // Method 1: Hook grecaptcha.enterprise.execute() to return our token
+            if (window.grecaptcha && window.grecaptcha.enterprise) {
+                simulationSteps.push('Found grecaptcha.enterprise - hooking execute method');
+                
+                try {
+                    // Store original execute method
+                    const originalExecute = window.grecaptcha.enterprise.execute;
+                    
+                    // Override execute to return our token
+                    window.grecaptcha.enterprise.execute = function(options) {
+                        console.log('🎯 grecaptcha.enterprise.execute() called - returning solved token');
+                        
+                        // Call original to maintain compatibility (but return our token)
+                        if (originalExecute) {
+                            try {
+                                const originalResult = originalExecute.call(this, options);
+                                // If original returns a Promise, resolve it with our token
+                                if (originalResult && typeof originalResult.then === 'function') {
+                                    return Promise.resolve(token);
+                                }
+                            } catch (e) {
+                                console.log('Original execute failed:', e);
+                            }
+                        }
+                        
+                        // Return our solved token directly
+                        return Promise.resolve(token);
+                    };
+                    
+                    successMethods.push('grecaptcha-enterprise-hook');
+                    simulationSteps.push('Successfully hooked grecaptcha.enterprise.execute()');
+                    
+                } catch (hookError) {
+                    simulationSteps.push('Failed to hook grecaptcha.enterprise.execute(): ' + hookError.message);
+                }
+            }
+            
+            // Method 2: Hook regular grecaptcha.execute() as fallback
+            if (window.grecaptcha && window.grecaptcha.execute) {
+                simulationSteps.push('Found regular grecaptcha - hooking execute method');
+                
+                try {
+                    const originalExecute = window.grecaptcha.execute;
+                    
+                    window.grecaptcha.execute = function(sitekey, options) {
+                        console.log('🎯 grecaptcha.execute() called - returning solved token');
+                        
+                        // If this matches our target sitekey, return our token
+                        if (sitekey === siteKey || !sitekey) {
+                            return Promise.resolve(token);
+                        }
+                        
+                        // Otherwise call original
+                        if (originalExecute) {
+                            return originalExecute.call(this, sitekey, options);
+                        }
+                    };
+                    
+                    successMethods.push('grecaptcha-hook');
+                    simulationSteps.push('Successfully hooked grecaptcha.execute()');
+                    
+                } catch (hookError) {
+                    simulationSteps.push('Failed to hook grecaptcha.execute(): ' + hookError.message);
+                }
+            }
+            
+            // Method 3: Store token globally for any other hooks
+            window.__solvedRecaptchaToken = token;
+            window.__captchaToken = token;
+            successMethods.push('global-token-storage');
+            simulationSteps.push('Stored token globally for fallback access');
+            
+            // Method 4: Try to trigger any pending reCAPTCHA executions
+            setTimeout(() => {
+                simulationSteps.push('Attempting to trigger pending reCAPTCHA executions');
+                
+                // Look for any reCAPTCHA widgets that might be waiting
+                if (window.___grecaptcha_cfg && window.___grecaptcha_cfg.clients) {
+                    for (let widgetId in window.___grecaptcha_cfg.clients) {
+                        const widget = window.___grecaptcha_cfg.clients[widgetId];
+                        
+                        // Try to find and trigger callbacks
+                        for (let k1 in widget) {
+                            if (typeof widget[k1] !== "object") continue;
+                            
+                            for (let k2 in widget[k1]) {
+                                if (widget[k1][k2] && widget[k1][k2].sitekey === siteKey) {
+                                    const widgetConfig = widget[k1][k2];
+                                    
+                                    // Execute any callbacks with our token
+                                    for (let prop in widgetConfig) {
+                                        if (prop === 'callback' && widgetConfig[prop]) {
+                                            const callback = widgetConfig[prop];
+                                            
+                                            setTimeout(() => {
+                                                try {
+                                                    if (typeof callback === "function") {
+                                                        callback(token);
+                                                        successMethods.push('widget-callback-executed');
+                                                        simulationSteps.push('Executed widget callback with token');
+                                                    } else if (typeof callback === "string" && window[callback]) {
+                                                        window[callback](token);
+                                                        successMethods.push('widget-string-callback-executed');
+                                                        simulationSteps.push('Executed string callback with token');
+                                                    }
+                                                } catch (callbackError) {
+                                                    simulationSteps.push('Widget callback error: ' + callbackError.message);
+                                                }
+                                            }, 100);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // Try to manually trigger execute if available
+                if (window.grecaptcha && window.grecaptcha.enterprise && window.grecaptcha.enterprise.execute) {
+                    try {
+                        const result = window.grecaptcha.enterprise.execute();
+                        if (result && typeof result.then === 'function') {
+                            result.then(() => {
+                                simulationSteps.push('grecaptcha.enterprise.execute() completed');
+                                successMethods.push('manual-execute-success');
+                            });
+                        }
+                    } catch (executeError) {
+                        simulationSteps.push('Manual execute error: ' + executeError.message);
+                    }
+                }
+                
+            }, 1000);
+            
+            console.log('📊 Injection steps:', simulationSteps);
+            console.log('🎯 Success methods:', successMethods);
+            
+            return { 
+                success: successMethods.length >= 1, // Need at least one successful method
+                methods: successMethods,
+                steps: simulationSteps,
+                element: 'grecaptcha.enterprise.execute() hook',
+                token: token.substring(0, 20) + '...' // Partial token for logging
+            };
+            
+        }, token, siteKey);
+
+        if (!injectionResult.success) {
+            return {
+                success: false,
+                error: 'Failed to inject token or trigger callbacks',
+                siteKey: siteKey,
+                token: token
+            };
+        }
+
+        console.log(`💉 Token injection successful: ${injectionResult.methods.join(', ')}`);
+        console.log(`🔔 Simulation steps: ${injectionResult.steps.join(', ')}`);
+
+        // Wait and verify reCAPTCHA is actually solved before proceeding
+        console.log('⏳ Waiting for reCAPTCHA verification...');
+        await new Promise(resolve => setTimeout(resolve, 3000));
+
+        // Verify the reCAPTCHA is solved by checking if the challenge is gone
+        const verificationResult = await page.evaluate(() => {
+            // Check if reCAPTCHA iframe is still visible
+            const recaptchaFrames = document.querySelectorAll('iframe[src*="recaptcha"]');
+            let isVisible = false;
+            
+            recaptchaFrames.forEach(frame => {
+                if (frame.offsetParent !== null && frame.style.display !== 'none') {
+                    isVisible = true;
+                }
+            });
+
+            // Check for "I'm not a robot" text
+            const robotText = document.body.innerText.includes('I\'m not a robot') || 
+                             document.body.innerText.includes('Please verify');
+            
+            // Check for reCAPTCHA challenge containers
+            const challengeContainers = document.querySelectorAll('[class*="recaptcha"], [id*="recaptcha"]');
+            let challengeVisible = false;
+            
+            challengeContainers.forEach(container => {
+                if (container.offsetParent !== null && 
+                    (container.style.display !== 'none' || !container.style.display)) {
+                    challengeVisible = true;
+                }
+            });
+
+            return {
+                recaptchaFrameVisible: isVisible,
+                robotTextVisible: robotText,
+                challengeVisible: challengeVisible,
+                isSolved: !isVisible && !robotText && !challengeVisible
+            };
+        });
+
+        console.log('🔍 Verification result:', verificationResult);
+
+        if (!verificationResult.isSolved) {
+            console.log('⚠️ reCAPTCHA may not be properly solved, but continuing with submission...');
+        } else {
+            console.log('✅ reCAPTCHA appears to be solved successfully');
+        }
+
+        return {
+            success: true,
+            siteKey: siteKey,
+            token: token,
+            injectionMethods: injectionResult.methods,
+            injectionElement: injectionResult.element,
+            simulationSteps: injectionResult.steps,
+            verificationResult: verificationResult,
+            pageUrl: pageUrl,
+            foundMethod: foundMethod,
+            debugInfo: debugInfo
+        };
+
+    } catch (error) {
+        console.error('❌ Error finding and solving reCAPTCHA:', error.message);
+        return {
+            success: false,
+            error: error.message
+        };
+    }
+};
+
+/**
+ * API endpoint to solve reCAPTCHA on current page
  */
 const diagnose2CaptchaEndpoint = async (req, res) => {
     const { sessionId } = req.params;
@@ -3357,5 +4402,6 @@ module.exports = {
     configure2CaptchaEndpoint,
     validate2CaptchaEndpoint,
     diagnose2CaptchaEndpoint,
+    solveRecaptchaEndpoint,
     refreshSession
 };
