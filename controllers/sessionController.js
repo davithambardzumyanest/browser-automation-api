@@ -244,456 +244,292 @@ const validate2CaptchaConfig = async (page) => {
  * API endpoint to solve reCAPTCHA on current page
  */
 const solveRecaptchaEndpoint = async (req, res) => {
+
     const { sessionId } = req.params;
-    const { submitAfter = true, submitSelector = null, waitTime = 2000 } = req.body;
+    const { submitAfter = false, waitTime = 5000 } = req.body;
 
     const session = sessions.get(sessionId);
+
     if (!session) {
         return res.status(404).json({
-            error: 'Session not found',
-            message: `Session ${sessionId} does not exist or has expired`
+            error: "Session not found"
         });
     }
 
-    try {
-        console.log(` Starting reCAPTCHA solving for session ${sessionId}`);
+    const page = session.page;
 
-        // CRITICAL: Hook grecaptcha BEFORE solving to intercept Google's calls
-        console.log('🔧 Pre-hooking grecaptcha.enterprise.execute()...');
-        await session.page.evaluateOnNewDocument(() => {
-            console.log('🎯 Setting up grecaptcha hooks before page loads...');
-            
-            // Hook grecaptcha.enterprise.execute() as soon as it's available
-            let enterpriseExecuteHooked = false;
-            let regularExecuteHooked = false;
-            
-            const hookEnterpriseExecute = () => {
-                if (window.grecaptcha && window.grecaptcha.enterprise && !enterpriseExecuteHooked) {
-                    console.log('🔒 Hooking grecaptcha.enterprise.execute()...');
-                    
-                    const originalExecute = window.grecaptcha.enterprise.execute;
-                    window.grecaptcha.enterprise.execute = function(options) {
-                        console.log('🎯 grecaptcha.enterprise.execute() intercepted!');
-                        
-                        // Check if we have a solved token
-                        if (window.__solvedRecaptchaToken || window.__captchaToken) {
-                            const token = window.__solvedRecaptchaToken || window.__captchaToken;
-                            console.log('✅ Returning solved token from grecaptcha.enterprise.execute()');
-                            return Promise.resolve(token);
-                        }
-                        
-                        // Otherwise call original
-                        return originalExecute.call(this, options);
-                    };
-                    
-                    enterpriseExecuteHooked = true;
-                    console.log('✅ grecaptcha.enterprise.execute() successfully hooked');
-                }
+    try {
+
+        console.log("🚀 Starting captcha solving");
+
+        // Forward browser console logs to node
+        page.on("console", msg => console.log("BROWSER:", msg.text()));
+
+        // -------------------------------------------------
+        // 1️⃣ Detect reCAPTCHA sitekey
+        // -------------------------------------------------
+
+        const captchaInfo = await page.evaluate(() => {
+
+            const result = {
+                siteKey: null,
+                isEnterprise: false
             };
-            
-            const hookRegularExecute = () => {
-                if (window.grecaptcha && window.grecaptcha.execute && !regularExecuteHooked) {
-                    console.log('🔒 Hooking grecaptcha.execute()...');
-                    
-                    const originalExecute = window.grecaptcha.execute;
-                    window.grecaptcha.execute = function(sitekey, options) {
-                        console.log('🎯 grecaptcha.execute() intercepted!');
-                        
-                        // Check if we have a solved token
-                        if (window.__solvedRecaptchaToken || window.__captchaToken) {
-                            const token = window.__solvedRecaptchaToken || window.__captchaToken;
-                            console.log('✅ Returning solved token from grecaptcha.execute()');
-                            return Promise.resolve(token);
-                        }
-                        
-                        // Otherwise call original
-                        return originalExecute.call(this, sitekey, options);
-                    };
-                    
-                    regularExecuteHooked = true;
-                    console.log('✅ grecaptcha.execute() successfully hooked');
+
+            const iframe = document.querySelector('iframe[src*="recaptcha"]');
+
+            if (iframe) {
+
+                const match = iframe.src.match(/[?&]k=([^&]+)/);
+
+                if (match) result.siteKey = match[1];
+
+                if (iframe.src.includes("enterprise")) {
+                    result.isEnterprise = true;
                 }
-            };
-            
-            // Try to hook immediately if already loaded
-            hookEnterpriseExecute();
-            hookRegularExecute();
-            
-            // Set up intervals to hook when grecaptcha loads later
-            const enterpriseInterval = setInterval(() => {
-                if (enterpriseExecuteHooked) {
-                    clearInterval(enterpriseInterval);
-                } else {
-                    hookEnterpriseExecute();
-                }
-            }, 100);
-            
-            const regularInterval = setInterval(() => {
-                if (regularExecuteHooked) {
-                    clearInterval(regularInterval);
-                } else {
-                    hookRegularExecute();
-                }
-            }, 100);
-            
-            // Also hook when grecaptcha is assigned
-            let grecaptchaDescriptor = Object.getOwnPropertyDescriptor(window, 'grecaptcha');
-            if (!grecaptchaDescriptor) {
-                Object.defineProperty(window, 'grecaptcha', {
-                    set: function(value) {
-                        console.log('🔧 grecaptcha object being set...');
-                        this._grecaptcha = value;
-                        
-                        // Hook immediately when set
-                        setTimeout(() => {
-                            hookEnterpriseExecute();
-                            hookRegularExecute();
-                        }, 0);
-                    },
-                    get: function() {
-                        return this._grecaptcha;
-                    }
-                });
+
             }
-            
-            console.log('🚀 grecaptcha hooks initialized');
+
+            if (!result.siteKey && window.___grecaptcha_cfg) {
+
+                const clients = window.___grecaptcha_cfg.clients || {};
+
+                for (const client of Object.values(clients)) {
+
+                    for (const key of Object.keys(client)) {
+
+                        const obj = client[key];
+
+                        if (obj && obj.sitekey) {
+
+                            result.siteKey = obj.sitekey;
+
+                            if (obj.enterprise) {
+                                result.isEnterprise = true;
+                            }
+
+                            break;
+                        }
+
+                    }
+
+                }
+
+            }
+
+            return result;
+
         });
 
-        // Solve the reCAPTCHA
-        const solveResult = await findAndSolveRecaptcha(session.page);
+        if (!captchaInfo.siteKey) {
 
-        if (!solveResult.success) {
             return res.status(400).json({
-                error: 'Failed to solve reCAPTCHA',
-                message: solveResult.error,
-                details: solveResult
+                success: false,
+                message: "No reCAPTCHA detected"
             });
+
         }
+
+        console.log("🎫 Sitekey:", captchaInfo.siteKey);
+        console.log("Enterprise:", captchaInfo.isEnterprise);
+
+        // -------------------------------------------------
+        // 2️⃣ Solve captcha with 2Captcha
+        // -------------------------------------------------
+
+        const token = await solveRecaptchaWith2Captcha(
+            page,
+            captchaInfo.siteKey,
+            page.url(),
+            session.proxy || null,
+            captchaInfo.isEnterprise
+        );
+
+        console.log("🎯 Captcha solved");
+
+        // -------------------------------------------------
+        // 3️⃣ Inject token and trigger events
+        // -------------------------------------------------
+
+        await page.evaluate((token) => {
+
+            console.log("💉 Injecting token");
+
+            window.__captchaToken = token;
+
+            // ensure textarea exists
+            let textarea = document.getElementById("g-recaptcha-response");
+
+            if (!textarea) {
+
+                textarea = document.createElement("textarea");
+
+                textarea.id = "g-recaptcha-response";
+                textarea.name = "g-recaptcha-response";
+                textarea.style.display = "none";
+
+                document.body.appendChild(textarea);
+
+            }
+
+            textarea.value = token;
+
+            // Trigger change events (remove innerHTML assignment)
+            textarea.dispatchEvent(new Event("change", { bubbles: true }));
+            textarea.dispatchEvent(new Event("input", { bubbles: true }));
+            textarea.dispatchEvent(new Event("blur", { bubbles: true }));
+
+        }, token);
+
+        // -------------------------------------------------
+        // 4️⃣ Trigger grecaptcha execution
+        // -------------------------------------------------
+
+        await page.evaluate((token) => {
+
+            if (!window.grecaptcha) return;
+
+            console.log("⚡ Triggering grecaptcha");
+
+            try {
+
+                if (window.grecaptcha.enterprise?.execute) {
+
+                    window.grecaptcha.enterprise.execute();
+
+                }
+
+                if (window.grecaptcha.execute) {
+
+                    window.grecaptcha.execute();
+
+                }
+
+            } catch (e) {
+                console.log("execute error", e);
+            }
+
+        }, token);
+
+        // -------------------------------------------------
+        // 5️⃣ Trigger internal callbacks
+        // -------------------------------------------------
+
+        await page.evaluate((token) => {
+
+            console.log("🔔 Triggering callbacks");
+
+            function searchCallbacks(obj) {
+
+                if (!obj || typeof obj !== "object") return;
+
+                for (const key in obj) {
+
+                    const val = obj[key];
+
+                    if (key === "callback" && typeof val === "function") {
+
+                        try {
+                            console.log("Calling callback");
+                            val(token);
+                        } catch (e) {
+                            console.log("callback error", e);
+                        }
+
+                    }
+
+                    if (typeof val === "object") {
+                        searchCallbacks(val);
+                    }
+
+                }
+
+            }
+
+            if (window.___grecaptcha_cfg?.clients) {
+
+                Object.values(window.___grecaptcha_cfg.clients)
+                    .forEach(client => searchCallbacks(client));
+
+            }
+
+        }, token);
+
+        // -------------------------------------------------
+        // 6️⃣ Fire generic success events
+        // -------------------------------------------------
+
+        await page.evaluate(() => {
+
+            const events = [
+                "captcha-success",
+                "recaptcha-success",
+                "verification-complete"
+            ];
+
+            events.forEach(name => {
+                document.dispatchEvent(new Event(name, { bubbles: true }));
+            });
+
+        });
+
+        // -------------------------------------------------
+        // 7️⃣ Wait for page logic
+        // -------------------------------------------------
+
+        await new Promise(r => setTimeout(r, waitTime));
+
+        // -------------------------------------------------
+        // 8️⃣ Optional submit
+        // -------------------------------------------------
 
         let submitResult = null;
 
-        // Submit form if requested
         if (submitAfter) {
-            // Check if reCAPTCHA was actually solved before submitting
-            if (solveResult.verificationResult && !solveResult.verificationResult.isSolved) {
-                console.log('⚠️ reCAPTCHA verification shows it may not be solved, but attempting submission anyway...');
-            }
-            
-            // Check if any callbacks were triggered
-            if (solveResult.simulationSteps && solveResult.simulationSteps.length === 0) {
-                console.log('⚠️ No simulation steps executed - reCAPTCHA may not be properly solved');
-            } else {
-                console.log(`✅ ${solveResult.simulationSteps.length} simulation steps executed`);
-            }
-            
-            console.log(` Submitting form after solving...`);
-            
-            try {
-                // Wait a bit for the token to be processed (longer wait for Google)
-                await new Promise(resolve => setTimeout(resolve, Math.max(waitTime, 8000)));
 
-                // Google Auth-specific pre-submit verification and submission
-                const preSubmitCheck = await session.page.evaluate(() => {
-                    // Check for Google-specific indicators
-                    const isGoogleAuth = window.location.hostname.includes('google.com') ||
-                                      window.location.hostname.includes('accounts.google.com') ||
-                                      document.querySelector('[data-sitekey*="6LeIx"]') !== null; // Google test key
-                    
-                    const robotText = document.body.innerText.includes('I\'m not a robot') || 
-                                     document.body.innerText.includes('Please verify') ||
-                                     document.body.innerText.includes('Please verify that you are not a robot') ||
-                                     document.body.innerText.includes('Confirm you\'re not a robot');
-                    
-                    // Check for reCAPTCHA challenge still visible
-                    const recaptchaFrames = document.querySelectorAll('iframe[src*="recaptcha"]');
-                    let challengeVisible = false;
-                    
-                    recaptchaFrames.forEach(frame => {
-                        if (frame.offsetParent !== null && frame.style.display !== 'none') {
-                            challengeVisible = true;
-                        }
-                    });
-                    
-                    // Check if reCAPTCHA response is populated
-                    const responseTextarea = document.querySelector('textarea[name="g-recaptcha-response"]') ||
-                                           document.getElementById('g-recaptcha-response');
-                    const hasResponse = responseTextarea && responseTextarea.value && responseTextarea.value.length > 0;
-                    
-                    // Google Auth specific checks
-                    const googleNextButton = document.querySelector('div[role="button"][data-primary-action-label], button[data-primary-action-label], div[jsname*="bVqjve"]');
-                    const hasGoogleButton = googleNextButton !== null;
-                    
-                    return {
-                        isGoogleAuth,
-                        robotTextVisible: robotText,
-                        challengeVisible: challengeVisible,
-                        hasResponse: hasResponse,
-                        hasGoogleButton: hasGoogleButton,
-                        pageUrl: window.location.href,
-                        pageTitle: document.title
-                    };
-                });
+            submitResult = await page.evaluate(() => {
 
-                console.log('🔍 Pre-submit check result:', preSubmitCheck);
+                const buttons = document.querySelectorAll("button, input[type=submit]");
 
-                // Google Auth-specific submission logic
-                if (preSubmitCheck.isGoogleAuth) {
-                    console.log('🔒 Detected Google Auth page - using Google-specific submission');
-                    
-                    // Google Auth submission requires different approach
-                    const googleSubmitResult = await session.page.evaluate(() => {
-                        const results = [];
-                        
-                        // Method 1: Look for Google's "Next" button with multiple selectors
-                        const nextButtonSelectors = [
-                            'div[role="button"][data-primary-action-label]',
-                            'button[data-primary-action-label]', 
-                            'div[jsname*="bVqjve"]',
-                            'div[role="button"][jsname*="LgbsSe"]',
-                            'button[jsname*="LgbsSe"]',
-                            'div[role="button"]:has(span[contains(text(), "Next")])',
-                            'button:has(span[contains(text(), "Next")])',
-                            'div[role="button"][aria-label*="Next"]',
-                            'button[aria-label*="Next"]',
-                            'div[data-primary-action-label="Next"]',
-                            'button[data-primary-action-label="Next"]'
-                        ];
-                        
-                        for (const selector of nextButtonSelectors) {
-                            try {
-                                const button = document.querySelector(selector);
-                                if (button && button.offsetParent !== null) {
-                                    results.push({
-                                        method: 'google-next-button',
-                                        selector: selector,
-                                        element: button.tagName + (button.className ? '.' + button.className.split(' ').join('.') : ''),
-                                        text: button.textContent || button.innerText || 'No text',
-                                        clickable: !button.disabled
-                                    });
-                                    
-                                    // Try to click the button with human-like behavior
-                                    if (!button.disabled) {
-                                        // Simulate human approach and click
-                                        const rect = button.getBoundingClientRect();
-                                        const centerX = rect.left + rect.width / 2;
-                                        const centerY = rect.top + rect.height / 2;
-                                        
-                                        // Mouse approach
-                                        button.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-                                        button.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
-                                        
-                                        setTimeout(() => {
-                                            button.dispatchEvent(new MouseEvent('mousedown', {
-                                                bubbles: true,
-                                                clientX: centerX,
-                                                clientY: centerY,
-                                                button: 0
-                                            }));
-                                            
-                                            setTimeout(() => {
-                                                button.dispatchEvent(new MouseEvent('mouseup', {
-                                                    bubbles: true,
-                                                    clientX: centerX,
-                                                    clientY: centerY,
-                                                    button: 0
-                                                }));
-                                                
-                                                button.dispatchEvent(new MouseEvent('click', {
-                                                    bubbles: true,
-                                                    clientX: centerX,
-                                                    clientY: centerY,
-                                                    button: 0
-                                                }));
-                                                
-                                                // Also try direct click as fallback
-                                                button.click();
-                                                
-                                            }, Math.random() * 100 + 50);
-                                            
-                                        }, Math.random() * 200 + 100);
-                                        
-                                        return { success: true, method: 'google-next-click', selector };
-                                    }
-                                }
-                            } catch (e) {
-                                results.push({
-                                    method: 'google-next-button',
-                                    selector: selector,
-                                    error: e.message
-                                });
-                            }
-                        }
-                        
-                        // Method 2: Try to trigger Google's form validation without form
-                        const responseTextarea = document.querySelector('textarea[name="g-recaptcha-response"]') ||
-                                               document.getElementById('g-recaptcha-response');
-                        
-                        if (responseTextarea && responseTextarea.value) {
-                            results.push({
-                                method: 'google-validation-trigger',
-                                hasResponse: true,
-                                responseLength: responseTextarea.value.length
-                            });
-                            
-                            // Trigger Google's validation events
-                            const validationEvents = [
-                                new Event('change', { bubbles: true }),
-                                new Event('input', { bubbles: true }),
-                                new CustomEvent('recaptcha.success', { 
-                                    bubbles: true, 
-                                    detail: { response: responseTextarea.value } 
-                                }),
-                                new CustomEvent('google.verification.complete', {
-                                    bubbles: true,
-                                    detail: { token: responseTextarea.value }
-                                })
-                            ];
-                            
-                            validationEvents.forEach((event, index) => {
-                                setTimeout(() => {
-                                    responseTextarea.dispatchEvent(event);
-                                    document.dispatchEvent(event);
-                                }, index * 200);
-                            });
-                            
-                            // Try to find and trigger any submit handlers
-                            if (window.grecaptcha && window.grecaptcha.execute) {
-                                try {
-                                    // Execute all available widgets
-                                    Object.keys(window.grecaptcha.widgets || {}).forEach(widgetId => {
-                                        setTimeout(() => {
-                                            try {
-                                                window.grecaptcha.execute(widgetId);
-                                                results.push({
-                                                    method: 'grecaptcha-execute',
-                                                    widgetId: widgetId,
-                                                    success: true
-                                                });
-                                            } catch (e) {
-                                                results.push({
-                                                    method: 'grecaptcha-execute',
-                                                    widgetId: widgetId,
-                                                    error: e.message
-                                                });
-                                            }
-                                        }, Math.random() * 1000);
-                                    });
-                                } catch (e) {
-                                    results.push({
-                                        method: 'grecaptcha-execute',
-                                        error: e.message
-                                    });
-                                }
-                            }
-                        }
-                        
-                        // Method 3: Look for any clickable element that might submit
-                        const clickableElements = document.querySelectorAll('div[role="button"], button, [onclick]');
-                        clickableElements.forEach((element, index) => {
-                            const text = element.textContent || element.innerText || '';
-                            if (text.toLowerCase().includes('next') || 
-                                text.toLowerCase().includes('continue') ||
-                                text.toLowerCase().includes('submit')) {
-                                results.push({
-                                    method: 'google-clickable-found',
-                                    index: index,
-                                    tag: element.tagName,
-                                    text: text,
-                                    clickable: !element.disabled
-                                });
-                            }
-                        });
-                        
-                        return { results, found: results.length > 0 };
-                    });
-                    
-                    submitResult = googleSubmitResult;
-                    console.log('🔒 Google Auth submission result:', googleSubmitResult);
-                    
-                } else {
-                    // Regular form submission for non-Google pages
-                    console.log('📝 Using regular form submission for non-Google page');
-                    
-                    const formSubmitResult = await session.page.evaluate(() => {
-                        // Enhanced form submission logic for regular pages
-                        const submitSelectors = [
-                            'input[type="submit"]',
-                            'button[type="submit"]',
-                            'button:not([type])',
-                            'input[type="button"]',
-                            'form button',
-                            'form input[type="button"]',
-                            '[role="button"]',
-                            '.btn',
-                            '.button',
-                            '#submit',
-                            '#submit-btn'
-                        ];
-                        
-                        const results = [];
-                        
-                        for (const selector of submitSelectors) {
-                            try {
-                                const elements = document.querySelectorAll(selector);
-                                elements.forEach((element, index) => {
-                                    if (element.offsetParent !== null && !element.disabled) {
-                                        results.push({
-                                            method: 'form-submit',
-                                            selector: selector,
-                                            index: index,
-                                            tag: element.tagName,
-                                            text: element.textContent || element.value || 'No text',
-                                            clickable: true
-                                        });
-                                        
-                                        element.click();
-                                        return { success: true, method: 'form-click' };
-                                    }
-                                });
-                            } catch (e) {
-                                results.push({
-                                    method: 'form-submit',
-                                    selector: selector,
-                                    error: e.message
-                                });
-                            }
-                        }
-                        
-                        return { results, found: results.length > 0 };
-                    });
-                    
-                    submitResult = formSubmitResult;
-                    console.log('📝 Regular form submission result:', formSubmitResult);
+                for (const btn of buttons) {
+
+                    if (!btn.disabled && btn.offsetParent !== null) {
+
+                        btn.click();
+
+                        return {
+                            success: true,
+                            text: btn.innerText || btn.value
+                        };
+
+                    }
+
                 }
 
-            } catch (submitError) {
-                console.error('❌ Error during submission:', submitError.message);
-                submitResult = { 
-                    success: false, 
-                    error: submitError.message,
-                    isGoogleAuth: preSubmitCheck.isGoogleAuth 
-                };
-            }
+                return { success: false };
+
+            });
+
         }
 
-        // Return success response with all details
-        return res.status(200).json({
+        return res.json({
             success: true,
-            sessionId: sessionId,
-            result: solveResult,
-            submitResult: submitResult,
-            message: submitResult ? 'reCAPTCHA solved and form submitted successfully' : 'reCAPTCHA solved successfully'
+            tokenPreview: token.substring(0, 30) + "...",
+            submitted: submitAfter,
+            submitResult
         });
 
     } catch (error) {
-        console.error('❌ Error in solveRecaptchaEndpoint:', error.message);
+
+        console.error("Captcha solving error:", error);
+
         return res.status(500).json({
             success: false,
-            error: 'Internal server error',
-            message: error.message,
-            sessionId: sessionId
+            error: error.message
         });
+
     }
+
 };
 
 /**
@@ -919,13 +755,14 @@ const diagnose2Captcha = async (page) => {
 };
 
 /**
- * Solve reCAPTCHA using 2Captcha API
+ * Solve reCAPTCHA using 2Captcha API with proxy support
  * @param {Object} page - Puppeteer page object
  * @param {string} siteKey - The reCAPTCHA site key
  * @param {string} pageUrl - The URL of the page with reCAPTCHA
+ * @param {Object} proxy - Proxy configuration (optional)
  * @returns {Promise<string>} The solved reCAPTCHA token
  */
-const solveRecaptchaWith2Captcha = async (page, siteKey, pageUrl) => {
+const solveRecaptchaWith2Captcha = async (page, siteKey, pageUrl, proxy = null) => {
     const API_KEY = process.env.TWO_CAPTCHA_API_KEY;
     
     if (!API_KEY) {
@@ -936,17 +773,51 @@ const solveRecaptchaWith2Captcha = async (page, siteKey, pageUrl) => {
         console.log('🔍 Sending reCAPTCHA to 2Captcha service...');
         console.log(`📋 Site Key: ${siteKey}`);
         console.log(`📋 Page URL: ${pageUrl}`);
+        if (proxy) {
+            console.log(`🔐 Using proxy: ${proxy.server || proxy}`);
+        }
+
+        // Prepare 2Captcha API parameters
+        const apiParams = {
+            key: API_KEY,
+            method: 'userrecaptcha',
+            googlekey: siteKey,
+            pageurl: pageUrl,
+            json: 1
+        };
+
+        // Add proxy parameters if proxy is available
+        if (proxy) {
+            let proxyString = '';
+            let proxyType = 'HTTP'; // Default proxy type
+            
+            if (typeof proxy === 'string') {
+                // Simple proxy string: "http://host:port" or "host:port"
+                proxyString = proxy.startsWith('http') ? proxy.replace(/^https?:\/\//, '') : proxy;
+            } else if (typeof proxy === 'object') {
+                // Proxy object with server, username, password, type
+                if (proxy.server) {
+                    proxyString = proxy.server.replace(/^https?:\/\//, '');
+                    
+                    // Add authentication if provided
+                    if (proxy.username && proxy.password) {
+                        proxyString = `${proxy.username}:${proxy.password}@${proxyString}`;
+                    }
+                }
+                proxyType = proxy.type || proxyType;
+            }
+            
+            if (proxyString) {
+                apiParams.proxy = proxyString;
+                apiParams.proxytype = proxyType.toUpperCase();
+                console.log(`🔐 Added proxy: ${proxyString} (${proxyType})`);
+            }
+        }
 
         // Send captcha to 2Captcha
         const axios = require('axios');
         const response = await axios.get('http://2captcha.com/in.php', {
-            params: {
-                key: API_KEY,
-                method: 'userrecaptcha',
-                googlekey: siteKey,
-                pageurl: pageUrl,
-                json: 1
-            },
+            params: apiParams,
             timeout: 30000
         });
 
