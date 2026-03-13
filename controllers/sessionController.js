@@ -240,11 +240,7 @@ const validate2CaptchaConfig = async (page) => {
     }
 };
 
-/**
- * API endpoint to solve reCAPTCHA on current page
- */
 const solveRecaptchaEndpoint = async (req, res) => {
-
     const { sessionId } = req.params;
     const { submitAfter = false, waitTime = 5000 } = req.body;
 
@@ -259,79 +255,72 @@ const solveRecaptchaEndpoint = async (req, res) => {
     const page = session.page;
 
     try {
-
         console.log("🚀 Starting captcha solving");
+        
+        // Debug: Check if proxy is available in session
+        console.log("🔐 Session proxy:", session.proxy);
+        console.log("🔐 Session config proxy:", session.config?.proxy_full);
+        const sessionProxy = session.config?.proxy_full || null;
+        console.log("🔐 Using proxy:", sessionProxy);
 
         // Forward browser console logs to node
         page.on("console", msg => console.log("BROWSER:", msg.text()));
 
-        // -------------------------------------------------
-        // 1️⃣ Detect reCAPTCHA sitekey
-        // -------------------------------------------------
-
+        // 1️⃣ Detect reCAPTCHA sitekey and s parameter
         const captchaInfo = await page.evaluate(() => {
-
             const result = {
                 siteKey: null,
-                isEnterprise: false
+                isEnterprise: false,
+                s: null // Capture the 's' parameter if available
             };
 
             const iframe = document.querySelector('iframe[src*="recaptcha"]');
 
             if (iframe) {
-
                 const match = iframe.src.match(/[?&]k=([^&]+)/);
-
                 if (match) result.siteKey = match[1];
 
                 if (iframe.src.includes("enterprise")) {
                     result.isEnterprise = true;
+                    const sMatch = iframe.src.match(/[?&]s=([^&]+)/);
+                    if (sMatch) {
+                        result.s = sMatch[1];  // Capture the 's' parameter
+                        console.log("🔑 Found enterprise reCAPTCHA, s parameter:", result.s); // Log s parameter
+                    }
                 }
-
             }
 
             if (!result.siteKey && window.___grecaptcha_cfg) {
-
                 const clients = window.___grecaptcha_cfg.clients || {};
-
                 for (const client of Object.values(clients)) {
-
                     for (const key of Object.keys(client)) {
-
                         const obj = client[key];
-
                         if (obj && obj.sitekey) {
-
                             result.siteKey = obj.sitekey;
-
                             if (obj.enterprise) {
                                 result.isEnterprise = true;
+                                if (obj.s) result.s = obj.s; // Capture 's' from client if available
+                                console.log("🔑 Found enterprise reCAPTCHA in grecaptcha_cfg, s parameter:", result.s); // Log s parameter
                             }
-
                             break;
                         }
-
                     }
-
                 }
-
             }
 
             return result;
-
         });
 
         if (!captchaInfo.siteKey) {
-
             return res.status(400).json({
                 success: false,
                 message: "No reCAPTCHA detected"
             });
-
         }
 
         console.log("🎫 Sitekey:", captchaInfo.siteKey);
         console.log("Enterprise:", captchaInfo.isEnterprise);
+        console.log("🔑 s Parameter:", captchaInfo.s); // Log the captured 's' parameter
 
         // -------------------------------------------------
         // 2️⃣ Solve captcha with 2Captcha
@@ -341,8 +330,9 @@ const solveRecaptchaEndpoint = async (req, res) => {
             page,
             captchaInfo.siteKey,
             page.url(),
-            session.proxy || null,
-            captchaInfo.isEnterprise
+            sessionProxy,
+            captchaInfo.isEnterprise,
+            captchaInfo.s // Pass 's' if available
         );
 
         console.log("🎯 Captcha solved");
@@ -350,31 +340,33 @@ const solveRecaptchaEndpoint = async (req, res) => {
         // -------------------------------------------------
         // 3️⃣ Inject token and trigger events
         // -------------------------------------------------
+        await page.evaluate((token) => {
+            const fields = document.querySelectorAll('[name="g-recaptcha-response"]');
+            fields.forEach(el => {
+                el.value = token;
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+            });
+        }, token);
+
+        await wait(3000);
 
         await page.evaluate((token) => {
-
             console.log("💉 Injecting token");
 
             window.__captchaToken = token;
 
-            // ensure textarea exists
             let textarea = document.getElementById("g-recaptcha-response");
 
             if (!textarea) {
-
                 textarea = document.createElement("textarea");
-
                 textarea.id = "g-recaptcha-response";
                 textarea.name = "g-recaptcha-response";
                 textarea.style.display = "none";
-
                 document.body.appendChild(textarea);
-
             }
 
             textarea.value = token;
-
-            // Trigger change events (remove innerHTML assignment)
             textarea.dispatchEvent(new Event("change", { bubbles: true }));
             textarea.dispatchEvent(new Event("input", { bubbles: true }));
             textarea.dispatchEvent(new Event("blur", { bubbles: true }));
@@ -384,25 +376,18 @@ const solveRecaptchaEndpoint = async (req, res) => {
         // -------------------------------------------------
         // 4️⃣ Trigger grecaptcha execution
         // -------------------------------------------------
-
-        await page.evaluate((token) => {
-
+        await page.evaluate(() => {
             if (!window.grecaptcha) return;
 
             console.log("⚡ Triggering grecaptcha");
 
             try {
-
                 if (window.grecaptcha.enterprise?.execute) {
-
                     window.grecaptcha.enterprise.execute();
-
                 }
 
                 if (window.grecaptcha.execute) {
-
                     window.grecaptcha.execute();
-
                 }
 
             } catch (e) {
@@ -412,45 +397,41 @@ const solveRecaptchaEndpoint = async (req, res) => {
         }, token);
 
         // -------------------------------------------------
-        // 5️⃣ Trigger internal callbacks
+        // 5️⃣ Trigger internal callbacks with safe recursion
         // -------------------------------------------------
-
         await page.evaluate((token) => {
-
             console.log("🔔 Triggering callbacks");
 
-            function searchCallbacks(obj) {
+            // Use a Set to track visited objects and avoid infinite recursion
+            const visited = new Set();
 
+            function searchCallbacks(obj) {
                 if (!obj || typeof obj !== "object") return;
 
-                for (const key in obj) {
+                // If we've already visited this object, avoid recursion
+                if (visited.has(obj)) return;
+                visited.add(obj);
 
+                for (const key in obj) {
                     const val = obj[key];
 
                     if (key === "callback" && typeof val === "function") {
-
                         try {
                             console.log("Calling callback");
                             val(token);
                         } catch (e) {
                             console.log("callback error", e);
                         }
-
                     }
 
                     if (typeof val === "object") {
                         searchCallbacks(val);
                     }
-
                 }
-
             }
 
             if (window.___grecaptcha_cfg?.clients) {
-
-                Object.values(window.___grecaptcha_cfg.clients)
-                    .forEach(client => searchCallbacks(client));
-
+                Object.values(window.___grecaptcha_cfg.clients).forEach(client => searchCallbacks(client));
             }
 
         }, token);
@@ -458,9 +439,7 @@ const solveRecaptchaEndpoint = async (req, res) => {
         // -------------------------------------------------
         // 6️⃣ Fire generic success events
         // -------------------------------------------------
-
         await page.evaluate(() => {
-
             const events = [
                 "captcha-success",
                 "recaptcha-success",
@@ -476,7 +455,6 @@ const solveRecaptchaEndpoint = async (req, res) => {
         // -------------------------------------------------
         // 7️⃣ Wait for page logic
         // -------------------------------------------------
-
         await new Promise(r => setTimeout(r, waitTime));
 
         // -------------------------------------------------
@@ -484,32 +462,17 @@ const solveRecaptchaEndpoint = async (req, res) => {
         // -------------------------------------------------
 
         let submitResult = null;
-
         if (submitAfter) {
-
             submitResult = await page.evaluate(() => {
-
                 const buttons = document.querySelectorAll("button, input[type=submit]");
-
                 for (const btn of buttons) {
-
                     if (!btn.disabled && btn.offsetParent !== null) {
-
                         btn.click();
-
-                        return {
-                            success: true,
-                            text: btn.innerText || btn.value
-                        };
-
+                        return { success: true, text: btn.innerText || btn.value };
                     }
-
                 }
-
                 return { success: false };
-
             });
-
         }
 
         return res.json({
@@ -520,18 +483,13 @@ const solveRecaptchaEndpoint = async (req, res) => {
         });
 
     } catch (error) {
-
         console.error("Captcha solving error:", error);
-
         return res.status(500).json({
             success: false,
             error: error.message
         });
-
     }
-
 };
-
 /**
  * API endpoint to configure 2Captcha extension
  */
@@ -762,7 +720,7 @@ const diagnose2Captcha = async (page) => {
  * @param {Object} proxy - Proxy configuration (optional)
  * @returns {Promise<string>} The solved reCAPTCHA token
  */
-const solveRecaptchaWith2Captcha = async (page, siteKey, pageUrl, proxy = null) => {
+const solveRecaptchaWith2Captcha = async (page, siteKey, pageUrl, proxy = null, s = null) => {
     const API_KEY = process.env.TWO_CAPTCHA_API_KEY;
     
     if (!API_KEY) {
@@ -785,7 +743,7 @@ const solveRecaptchaWith2Captcha = async (page, siteKey, pageUrl, proxy = null) 
             pageurl: pageUrl,
             json: 1
         };
-
+        console.log(proxy)
         // Add proxy parameters if proxy is available
         if (proxy) {
             let proxyString = '';
@@ -2201,6 +2159,7 @@ const createSession = async (req, res) => {
                 headers: finalHeaders,
                 locale,
                 proxy: proxy ? (typeof proxy === 'string' ? proxy : proxy.server) : null,
+                proxy_full: proxy,
                 geolocation: geolocation && typeof geolocation.latitude === 'number' && typeof geolocation.longitude === 'number'
                     ? { accuracy: 50, ...geolocation }
                     : null,
