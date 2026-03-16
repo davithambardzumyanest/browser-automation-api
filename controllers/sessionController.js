@@ -465,6 +465,105 @@ const solveRecaptchaEndpoint = async (req, res) => {
                 
                 console.log(`🎭 Added ${scrollActions.length} random scroll actions`);
             }, 2000); // Start scrolls after reCAPTCHA interaction
+            
+            // Add click to top part at 100px x 100px coordinates
+            setTimeout(() => {
+                const clickX = 100;
+                const clickY = 100;
+                
+                // Find element at the click position
+                const elementAtPosition = document.elementFromPoint(clickX, clickY);
+                
+                if (elementAtPosition) {
+                    console.log(`🎭 Clicking element at 100x100: ${elementAtPosition.tagName}`);
+                    
+                    // Mouse approach to the position
+                    setTimeout(() => {
+                        const approachEvent = new MouseEvent('mousemove', {
+                            bubbles: true,
+                            clientX: clickX,
+                            clientY: clickY
+                        });
+                        document.dispatchEvent(approachEvent);
+                    }, 100);
+                    
+                    // Hover over the position
+                    setTimeout(() => {
+                        const hoverEvents = [
+                            new MouseEvent('mouseover', { bubbles: true, clientX: clickX, clientY: clickY }),
+                            new MouseEvent('mouseenter', { bubbles: true, clientX: clickX, clientY: clickY })
+                        ];
+                        hoverEvents.forEach(event => elementAtPosition.dispatchEvent(event));
+                    }, 300);
+                    
+                    // Click sequence at the exact position
+                    setTimeout(() => {
+                        // Mousedown
+                        elementAtPosition.dispatchEvent(new MouseEvent('mousedown', {
+                            bubbles: true,
+                            clientX: clickX,
+                            clientY: clickY,
+                            button: 0,
+                            detail: 1
+                        }));
+                        
+                        // Mouseup after short delay
+                        setTimeout(() => {
+                            elementAtPosition.dispatchEvent(new MouseEvent('mouseup', {
+                                bubbles: true,
+                                clientX: clickX,
+                                clientY: clickY,
+                                button: 0,
+                                detail: 1
+                            }));
+                            
+                            // Click event
+                            elementAtPosition.dispatchEvent(new MouseEvent('click', {
+                                bubbles: true,
+                                clientX: clickX,
+                                clientY: clickY,
+                                button: 0,
+                                detail: 1
+                            }));
+                            
+                            // Move away after click
+                            setTimeout(() => {
+                                elementAtPosition.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
+                                elementAtPosition.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
+                            }, 50);
+                            
+                        }, 80 + Math.random() * 40); // 80-120ms
+                    }, 500);
+                } else {
+                    console.log('🎭 No element found at 100x100, clicking document directly');
+                    
+                    // Click directly on document at the position
+                    setTimeout(() => {
+                        document.dispatchEvent(new MouseEvent('mousedown', {
+                            bubbles: true,
+                            clientX: clickX,
+                            clientY: clickY,
+                            button: 0
+                        }));
+                        
+                        setTimeout(() => {
+                            document.dispatchEvent(new MouseEvent('mouseup', {
+                                bubbles: true,
+                                clientX: clickX,
+                                clientY: clickY,
+                                button: 0
+                            }));
+                            
+                            document.dispatchEvent(new MouseEvent('click', {
+                                bubbles: true,
+                                clientX: clickX,
+                                clientY: clickY,
+                                button: 0
+                            }));
+                        }, 100);
+                    }, 300);
+                }
+            }, 1500); // Click after 1.5 seconds
         });
         
         // Wait for interaction simulation
