@@ -101,44 +101,13 @@ const startCleanupWorker = () => {
     }, CLEANUP_INTERVAL);
 };
 
-// Start cleanup worker
-startCleanupWorker();
+/**
+ * API endpoint to solve reCAPTCHA on current page
+ */
 
 /**
- * Pre-configure 2Captcha extension using Chrome extension messaging
- * @param {Object} options - Configuration options
- * @param {string} options.apiKey - 2Captcha API key
- * @param {Object} options.proxy - Proxy configuration
- * @param {boolean} options.useProxy - Whether to use proxy
- * @param {string} options.proxyType - Proxy type
+ * API endpoint to solve reCAPTCHA on current page
  */
-const preConfigure2Captcha = async (options = {}) => {
-    console.log('🔧 Pre-configuring 2Captcha extension using Chrome APIs...');
-    
-    // Store configuration in environment for later use
-    const {
-        apiKey = process.env.TWO_CAPTCHA_API_KEY,
-        proxy = null,
-        useProxy = false,
-        proxyType = 'HTTP'
-    } = options;
-
-    if (!apiKey) {
-        console.warn('No 2Captcha API key provided for pre-configuration');
-        return false;
-    }
-
-    // Store in environment for runtime access
-    process.env.TWO_CAPTCHA_API_KEY = apiKey;
-    if (useProxy && proxy) {
-        process.env.TWO_CAPTCHA_PROXY = `${proxy.username}:${proxy.password}@${proxy.server.replace(/^https?:\/\//, '')}`;
-        process.env.TWO_CAPTCHA_PROXY_TYPE = proxyType;
-    }
-    
-    console.log('✅ 2Captcha configuration stored in environment');
-    
-    return true;
-};
 
 /**
  * Configure 2Captcha extension using Chrome extension APIs
@@ -2021,13 +1990,8 @@ const createSession = async (req, res) => {
         launchOptions.defaultViewport = viewportSettings;
         const path = require('path');
 
-        const extensionPath = path.resolve(
-            process.cwd(),
-            'extensions/2captcha-solver'
-        );
+        console.log('Browser launch options prepared');
 
-        console.log('Extension path:', extensionPath);
-        
         // Remove conflicting extension arguments and add proper ones
         launchOptions.args = launchOptions.args.filter(arg => 
             !arg.includes('--disable-extensions') &&
@@ -2042,8 +2006,6 @@ const createSession = async (req, res) => {
             '--disable-software-rasterizer',
             '--disable-features=IsolateOrigins,site-per-process',
             `--window-size=${viewportWidth},${viewportHeight}`,
-            `--load-extension=${extensionPath}`,
-            `--disable-extensions-except=${extensionPath}`,
         );
 
         // Launch browser and create page
@@ -2557,13 +2519,13 @@ const createSession = async (req, res) => {
         await wait(2000);
 
         // Configure 2Captcha directly without UI interaction
-        await configure2CaptchaDirectly(extPage, {
-            apiKey: process.env.TWO_CAPTCHA_API_KEY,
-            proxy: proxy,
-            useProxy: proxy && proxy.username && proxy.password,
-            proxyType: proxy?.type || 'HTTP',
-            extId: extPage.url().split('/')[2]
-        });
+        // await configure2CaptchaDirectly(extPage, {
+        //     apiKey: process.env.TWO_CAPTCHA_API_KEY,
+        //     proxy: proxy,
+        //     useProxy: proxy && proxy.username && proxy.password,
+        //     proxyType: proxy?.type || 'HTTP',
+        //     extId: extPage.url().split('/')[2]
+        // });
 
         res.json({
             success: true,
