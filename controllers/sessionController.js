@@ -338,40 +338,325 @@ const solveRecaptchaEndpoint = async (req, res) => {
         console.log("🎯 Captcha solved");
 
         // -------------------------------------------------
-        // 3️⃣ Inject token and trigger events
+        // 3️⃣ Inject token and simulate local solving
         // -------------------------------------------------
-        await page.evaluate((token) => {
-            const fields = document.querySelectorAll('[name="g-recaptcha-response"]');
-            fields.forEach(el => {
-                el.value = token;
-                el.dispatchEvent(new Event('change', { bubbles: true }));
-                el.dispatchEvent(new Event('input', { bubbles: true }));
-            });
-        }, token);
-
-        await wait(3000);
-
-        await page.evaluate((token) => {
-            console.log("💉 Injecting token");
-
-            window.__captchaToken = token;
-
-            let textarea = document.getElementById("g-recaptcha-response");
-
-            if (!textarea) {
-                textarea = document.createElement("textarea");
-                textarea.id = "g-recaptcha-response";
-                textarea.name = "g-recaptcha-response";
-                textarea.style.display = "none";
-                document.body.appendChild(textarea);
+        
+        // First, simulate user interaction with reCAPTCHA before solving
+        console.log('🎭 Simulating user interaction with reCAPTCHA...');
+        await page.evaluate(() => {
+            // Find reCAPTCHA iframe
+            const recaptchaIframe = document.querySelector('iframe[src*="recaptcha"]');
+            if (recaptchaIframe) {
+                const rect = recaptchaIframe.getBoundingClientRect();
+                
+                // Simulate mouse movements around the reCAPTCHA
+                for (let i = 0; i < 5; i++) {
+                    setTimeout(() => {
+                        const x = rect.left + Math.random() * rect.width;
+                        const y = rect.top + Math.random() * rect.height;
+                        recaptchaIframe.dispatchEvent(new MouseEvent('mousemove', {
+                            bubbles: true,
+                            clientX: x,
+                            clientY: y
+                        }));
+                    }, i * 200);
+                }
+                
+                // Simulate hover
+                setTimeout(() => {
+                    recaptchaIframe.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+                    recaptchaIframe.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+                }, 1000);
+                
+                // Simulate click
+                setTimeout(() => {
+                    const centerX = rect.left + rect.width / 2;
+                    const centerY = rect.top + rect.height / 2;
+                    
+                    recaptchaIframe.dispatchEvent(new MouseEvent('mousedown', {
+                        bubbles: true,
+                        clientX: centerX,
+                        clientY: centerY,
+                        button: 0
+                    }));
+                    
+                    setTimeout(() => {
+                        recaptchaIframe.dispatchEvent(new MouseEvent('mouseup', {
+                            bubbles: true,
+                            clientX: centerX,
+                            clientY: centerY,
+                            button: 0
+                        }));
+                        
+                        recaptchaIframe.dispatchEvent(new MouseEvent('click', {
+                            bubbles: true,
+                            clientX: centerX,
+                            clientY: centerY,
+                            button: 0
+                        }));
+                    }, 100);
+                }, 1200);
             }
-
-            textarea.value = token;
-            textarea.dispatchEvent(new Event("change", { bubbles: true }));
-            textarea.dispatchEvent(new Event("input", { bubbles: true }));
-            textarea.dispatchEvent(new Event("blur", { bubbles: true }));
-
+        });
+        
+        // Wait for interaction simulation
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        // Now inject token with advanced local solving simulation
+        console.log('💉 Injecting token with advanced local solving simulation...');
+        await page.evaluate((token) => {
+            console.log("🎭 Starting advanced local solving simulation");
+            
+            // Record solving start time and create solving context
+            window.__recaptchaSolveStart = Date.now();
+            window.__recaptchaLocalSolving = true;
+            window.__recaptchaSolvingSteps = [];
+            
+            // Create realistic solving timeline
+            const solveSteps = {
+                initialFocus: 200 + Math.random() * 300,      // 200-500ms
+                iframeInteraction: 800 + Math.random() * 400,   // 800-1200ms
+                challengeAppear: 1200 + Math.random() * 800,   // 1200-2000ms
+                userThinking: 2000 + Math.random() * 1000,  // 2000-3000ms
+                startSolving: 3500 + Math.random() * 1500,  // 3500-5000ms
+                solvingProcess: 8000 + Math.random() * 12000, // 8000-20000ms
+                verification: 2000 + Math.random() * 1000       // 2000-3000ms
+            };
+            
+            // Step 1: Initial page focus and scroll
+            setTimeout(() => {
+                window.focus();
+                window.scrollTo(0, document.body.scrollHeight / 2);
+                window.__recaptchaSolvingSteps.push('page_focused_and_scrolled');
+            }, solveSteps.initialFocus);
+            
+            // Step 2: Find and interact with reCAPTCHA iframe
+            setTimeout(() => {
+                const recaptchaIframe = document.querySelector('iframe[src*="recaptcha"]');
+                if (recaptchaIframe) {
+                    const rect = recaptchaIframe.getBoundingClientRect();
+                    
+                    // Simulate realistic mouse approach
+                    const approachPoints = [
+                        { x: rect.left - 50, y: rect.top - 20 },
+                        { x: rect.left + 20, y: rect.top + 10 },
+                        { x: rect.left + rect.width / 2, y: rect.top - 10 }
+                    ];
+                    
+                    approachPoints.forEach((point, index) => {
+                        setTimeout(() => {
+                            recaptchaIframe.dispatchEvent(new MouseEvent('mousemove', {
+                                bubbles: true,
+                                clientX: point.x,
+                                clientY: point.y
+                            }));
+                        }, index * 150);
+                    });
+                    
+                    // Hover over reCAPTCHA
+                    setTimeout(() => {
+                        recaptchaIframe.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+                        recaptchaIframe.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+                        window.__recaptchaSolvingSteps.push('iframe_hovered');
+                    }, 600);
+                }
+            }, solveSteps.iframeInteraction);
+            
+            // Step 3: Wait for challenge to appear and click
+            setTimeout(() => {
+                const recaptchaIframe = document.querySelector('iframe[src*="recaptcha"]');
+                if (recaptchaIframe) {
+                    const rect = recaptchaIframe.getBoundingClientRect();
+                    const centerX = rect.left + rect.width / 2;
+                    const centerY = rect.top + rect.height / 2;
+                    
+                    // Realistic click sequence with pressure variations
+                    setTimeout(() => {
+                        recaptchaIframe.dispatchEvent(new MouseEvent('mousedown', {
+                            bubbles: true,
+                            clientX: centerX + (Math.random() - 0.5) * 2,
+                            clientY: centerY + (Math.random() - 0.5) * 2,
+                            button: 0,
+                            pressure: 0.7 + Math.random() * 0.3
+                        }));
+                    }, 200);
+                    
+                    setTimeout(() => {
+                        recaptchaIframe.dispatchEvent(new MouseEvent('mouseup', {
+                            bubbles: true,
+                            clientX: centerX + (Math.random() - 0.5) * 2,
+                            clientY: centerY + (Math.random() - 0.5) * 2,
+                            button: 0,
+                            pressure: 0.3 + Math.random() * 0.4
+                        }));
+                    }, 350);
+                    
+                    setTimeout(() => {
+                        recaptchaIframe.dispatchEvent(new MouseEvent('click', {
+                            bubbles: true,
+                            clientX: centerX,
+                            clientY: centerY,
+                            button: 0,
+                            detail: 1
+                        }));
+                        window.__recaptchaSolvingSteps.push('iframe_clicked');
+                    }, 400);
+                }
+            }, solveSteps.challengeAppear);
+            
+            // Step 4: User thinking time before solving
+            setTimeout(() => {
+                // Simulate user reading and understanding the challenge
+                window.__recaptchaSolvingSteps.push('user_thinking');
+                
+                // Add some random mouse movements during thinking
+                for (let i = 0; i < 3; i++) {
+                    setTimeout(() => {
+                        document.dispatchEvent(new MouseEvent('mousemove', {
+                            bubbles: true,
+                            clientX: Math.random() * window.innerWidth,
+                            clientY: Math.random() * window.innerHeight
+                        }));
+                    }, i * 300);
+                }
+            }, solveSteps.userThinking);
+            
+            // Step 5: Start solving process
+            setTimeout(() => {
+                window.__recaptchaSolvingSteps.push('solving_started');
+                
+                // Find and prepare textarea
+                let textarea = document.getElementById("g-recaptcha-response");
+                if (!textarea) {
+                    textarea = document.createElement("textarea");
+                    textarea.id = "g-recaptcha-response";
+                    textarea.name = "g-recaptcha-response";
+                    textarea.style.display = "none";
+                    document.body.appendChild(textarea);
+                    window.__recaptchaSolvingSteps.push('textarea_created');
+                }
+                
+                // Simulate realistic typing with variations
+                let currentValue = '';
+                const baseTypingSpeed = 70 + Math.random() * 50; // 70-120ms base
+                const typingVariations = [0.8, 1.2, 0.9, 1.1, 1.0]; // Speed variations
+                
+                const typeCharacter = (index) => {
+                    if (index < token.length) {
+                        currentValue += token[index];
+                        textarea.value = currentValue;
+                        
+                        const currentSpeed = baseTypingSpeed * (typingVariations[index % typingVariations.length]);
+                        
+                        // Comprehensive keyboard events
+                        const keyEvents = [
+                            new KeyboardEvent('keydown', {
+                                bubbles: true,
+                                key: token[index],
+                                code: `Key${token[index].toUpperCase()}`,
+                                keyCode: token.charCodeAt(index),
+                                charCode: token.charCodeAt(index),
+                                which: token.charCodeAt(index),
+                                location: 0,
+                                altKey: false,
+                                ctrlKey: false,
+                                shiftKey: false,
+                                metaKey: false
+                            }),
+                            new Event('input', { bubbles: true }),
+                            new KeyboardEvent('keyup', {
+                                bubbles: true,
+                                key: token[index],
+                                code: `Key${token[index].toUpperCase()}`,
+                                keyCode: token.charCodeAt(index),
+                                charCode: token.charCodeAt(index),
+                                which: token.charCodeAt(index),
+                                location: 0,
+                                altKey: false,
+                                ctrlKey: false,
+                                shiftKey: false,
+                                metaKey: false
+                            })
+                        ];
+                        
+                        // Dispatch events with realistic timing
+                        keyEvents.forEach((event, eventIndex) => {
+                            setTimeout(() => {
+                                textarea.dispatchEvent(event);
+                            }, eventIndex * 5);
+                        });
+                        
+                        window.__recaptchaSolvingSteps.push(`typed_char_${index}_${currentSpeed.toFixed(0)}ms`);
+                        
+                        // Add occasional pauses and corrections
+                        if (Math.random() < 0.1 && index > 0) { // 10% chance of pause
+                            setTimeout(() => {
+                                // Simulate backspace and correction
+                                textarea.dispatchEvent(new KeyboardEvent('keydown', {
+                                    bubbles: true,
+                                    key: 'Backspace',
+                                    keyCode: 8,
+                                    which: 8
+                                }));
+                                
+                                currentValue = currentValue.slice(0, -1);
+                                textarea.value = currentValue;
+                                
+                                setTimeout(() => {
+                                    typeCharacter(index); // Retry same character
+                                }, 150);
+                            }, currentSpeed);
+                        } else {
+                            setTimeout(() => typeCharacter(index + 1), currentSpeed);
+                        }
+                    } else {
+                        // Token fully typed - completion sequence
+                        setTimeout(() => {
+                            textarea.dispatchEvent(new Event('change', { bubbles: true }));
+                            textarea.dispatchEvent(new Event('blur', { bubbles: true }));
+                            window.__recaptchaSolvingSteps.push('token_completed');
+                            
+                            // Store token and completion data
+                            window.__captchaToken = token;
+                            window.__recaptchaSolveEnd = Date.now();
+                            window.__recaptchaSolveTime = window.__recaptchaSolveEnd - window.__recaptchaSolveStart;
+                            
+                            // Final verification events
+                            const completionEvents = [
+                                new Event('change', { bubbles: true }),
+                                new Event('input', { bubbles: true }),
+                                new CustomEvent('recaptcha.success', { bubbles: true, detail: { token } }),
+                                new CustomEvent('captcha.completed', { bubbles: true, detail: { 
+                                    token, 
+                                    solveTime: window.__recaptchaSolveTime,
+                                    steps: window.__recaptchaSolvingSteps 
+                                }})
+                            ];
+                            
+                            completionEvents.forEach((event, index) => {
+                                setTimeout(() => {
+                                    textarea.dispatchEvent(event);
+                                    document.dispatchEvent(event);
+                                }, index * 100);
+                            });
+                            
+                            console.log('🎭 Advanced local solving completed in', window.__recaptchaSolveTime, 'ms');
+                            console.log('🎭 Total solving steps:', window.__recaptchaSolvingSteps.length);
+                            console.log('🎭 Solving timeline:', solveSteps);
+                            
+                        }, 500);
+                    }
+                };
+                
+                // Start typing with initial delay
+                setTimeout(() => typeCharacter(0), 300 + Math.random() * 200);
+                
+            }, solveSteps.startSolving);
+            
         }, token);
+        
+        // Wait for advanced simulation to complete
+        await new Promise(resolve => setTimeout(resolve, 25000)); // Wait 25 seconds for full simulation
 
         // -------------------------------------------------
         // 4️⃣ Trigger grecaptcha execution
@@ -731,19 +1016,86 @@ const solveRecaptchaWith2Captcha = async (page, siteKey, pageUrl, proxy = null, 
         console.log('🔍 Sending reCAPTCHA to 2Captcha service...');
         console.log(`📋 Site Key: ${siteKey}`);
         console.log(`📋 Page URL: ${pageUrl}`);
-        if (proxy) {
-            console.log(`🔐 Using proxy: ${proxy.server || proxy}`);
-        }
+        console.log(`🔑 s Parameter: ${s}`);
+        console.log(proxy)
 
-        // Prepare 2Captcha API parameters
+        // Get browser fingerprint for Google with enhanced anti-detection
+        const browserInfo = await page.evaluate(() => {
+            // Enhanced fingerprinting for Google anti-detection
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            ctx.textBaseline = 'top';
+            ctx.font = '14px Arial';
+            ctx.fillText('Browser fingerprint', 2, 2);
+            
+            const webgl = document.createElement('canvas');
+            const gl = webgl.getContext('webgl') || webgl.getContext('experimental-webgl');
+            const debugInfo = gl ? gl.getExtension('WEBGL_debug_renderer_info') : null;
+            
+            return {
+                userAgent: navigator.userAgent,
+                platform: navigator.platform,
+                language: navigator.language,
+                languages: navigator.languages,
+                screenResolution: `${screen.width}x${screen.height}`,
+                colorDepth: screen.colorDepth,
+                timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                timezoneOffset: new Date().getTimezoneOffset(),
+                webdriver: navigator.webdriver,
+                chrome: !!window.chrome,
+                chromeRuntime: !!window.chrome?.runtime,
+                plugins: Array.from(navigator.plugins).map(p => ({
+                    name: p.name,
+                    description: p.description,
+                    filename: p.filename
+                })).slice(0, 5),
+                canvas: !!canvas.getContext,
+                canvasFingerprint: canvas.toDataURL().slice(-50), // Last 50 chars
+                webgl: !!gl,
+                webglVendor: gl ? gl.getParameter(gl.VENDOR) : null,
+                webglRenderer: gl ? gl.getParameter(gl.RENDERER) : null,
+                cookies: navigator.cookieEnabled,
+                dnt: navigator.doNotTrack,
+                onLine: navigator.onLine,
+                connection: navigator.connection ? {
+                    effectiveType: navigator.connection.effectiveType,
+                    downlink: navigator.connection.downlink,
+                    rtt: navigator.connection.rtt
+                } : null,
+                deviceMemory: navigator.deviceMemory || 0,
+                hardwareConcurrency: navigator.hardwareConcurrency || 1,
+                permissions: navigator.permissions ? Object.keys(navigator.permissions) : [],
+                // Google-specific properties
+                googleAccount: !!window.google?.accounts,
+                gapi: !!window.gapi,
+                recaptcha: !!window.grecaptcha,
+                // Anti-automation detection
+                automation: {
+                    hasPhantom: !!window.callPhantom,
+                    hasSelenium: !!window._selenium,
+                    hasWebDriver: !!navigator.webdriver,
+                    hasChromeDriver: !!window.chrome?.runtime?.onConnect
+                }
+            };
+        });
+
+        console.log('🖥️ Enhanced browser fingerprint:', browserInfo);
+
+        // Prepare 2Captcha API parameters with exact values
         const apiParams = {
             key: API_KEY,
             method: 'userrecaptcha',
             googlekey: siteKey,
             pageurl: pageUrl,
+            invisible: 0,
+            enterprise: 1,
+            version: 'v2',
+            action: 'signin',
+            soft_id: 2834,
+            header_acao: 1,
             json: 1
         };
-        console.log(proxy)
+
         // Add proxy parameters if proxy is available
         if (proxy) {
             let proxyString = '';
@@ -771,6 +1123,11 @@ const solveRecaptchaWith2Captcha = async (page, siteKey, pageUrl, proxy = null, 
                 console.log(`🔐 Added proxy: ${proxyString} (${proxyType})`);
             }
         }
+
+        console.log('📤 API Parameters:', {
+            ...apiParams,
+            datas: JSON.parse(apiParams.datas || '{}')
+        });
 
         // Send captcha to 2Captcha
         const axios = require('axios');
@@ -807,7 +1164,32 @@ const solveRecaptchaWith2Captcha = async (page, siteKey, pageUrl, proxy = null, 
 
             if (result.data.status === 1 && result.data.request) {
                 console.log('✅ reCAPTCHA solved successfully!');
-                return result.data.request;
+                const token = result.data.request;
+                
+                // Simulate local solving to make it look like it was solved in the browser
+                console.log('🎭 Simulating local solving events...');
+                
+                // Add local solving timestamp and browser context
+                const localSolvingData = {
+                    token: token,
+                    solvedAt: Date.now(),
+                    userAgent: browserInfo.userAgent,
+                    platform: browserInfo.platform,
+                    language: browserInfo.language,
+                    screen: browserInfo.screenResolution,
+                    timezone: browserInfo.timezone,
+                    // Add random mouse movements and interactions
+                    interactions: {
+                        mouseMovements: Math.floor(Math.random() * 10) + 5, // 5-15 movements
+                        clicks: Math.floor(Math.random() * 3) + 1, // 1-3 clicks
+                        typingSpeed: Math.floor(Math.random() * 100) + 50, // 50-150ms per char
+                        solveTime: Math.floor(Math.random() * 30000) + 15000 // 15-45 seconds
+                    }
+                };
+                
+                console.log('🎭 Local solving data:', localSolvingData);
+                
+                return token;
             } else if (result.data.request === 'CAPCHA_NOT_READY') {
                 console.log(`⏳ Still solving... (${attempts}/${maxAttempts})`);
                 continue;
