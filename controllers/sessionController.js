@@ -366,6 +366,122 @@ const solveRecaptchaEndpoint = async (req, res) => {
                     }, 100);
                 }, 1200);
             }
+            
+            // Add random clicks to text elements and other areas
+            setTimeout(() => {
+                const clickableElements = [
+                    // Text elements
+                    'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+                    'p', 'span', 'div', 'label', 'strong', 'em',
+                    // Links
+                    'a',
+                    // Form elements
+                    'input[type="text"]', 'input[type="email"]', 'input[type="password"]',
+                    'textarea', 'select',
+                    // Other interactive elements
+                    '[role="button"]', '[role="link"]', '[role="option"]'
+                ];
+                
+                const elements = [];
+                clickableElements.forEach(selector => {
+                    const found = document.querySelectorAll(selector);
+                    elements.push(...Array.from(found));
+                });
+                
+                // Filter out buttons and reCAPTCHA elements
+                const filteredElements = elements.filter(el => {
+                    const tagName = el.tagName.toLowerCase();
+                    const isButton = tagName === 'button' || el.type === 'submit' || el.type === 'button';
+                    const isRecaptcha = el.src && el.src.includes('recaptcha') || 
+                                     el.id && el.id.includes('recaptcha');
+                    const isVisible = el.offsetParent !== null && 
+                                    el.offsetWidth > 0 && 
+                                    el.offsetHeight > 0;
+                    return !isButton && !isRecaptcha && isVisible;
+                });
+                
+                // Click 3-7 random elements
+                const numClicks = Math.floor(Math.random() * 5) + 3;
+                const selectedElements = [];
+                
+                for (let i = 0; i < numClicks && filteredElements.length > 0; i++) {
+                    const randomIndex = Math.floor(Math.random() * filteredElements.length);
+                    const element = filteredElements[randomIndex];
+                    
+                    if (!selectedElements.includes(element)) {
+                        selectedElements.push(element);
+                        
+                        const rect = element.getBoundingClientRect();
+                        const x = rect.left + Math.random() * rect.width;
+                        const y = rect.top + Math.random() * rect.height;
+                        
+                        setTimeout(() => {
+                            // Mouse approach
+                            element.dispatchEvent(new MouseEvent('mousemove', {
+                                bubbles: true,
+                                clientX: x,
+                                clientY: y
+                            }));
+                            
+                            setTimeout(() => {
+                                // Hover
+                                element.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+                                element.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+                                
+                                setTimeout(() => {
+                                    // Click sequence
+                                    element.dispatchEvent(new MouseEvent('mousedown', {
+                                        bubbles: true,
+                                        clientX: x,
+                                        clientY: y,
+                                        button: 0,
+                                        detail: 1
+                                    }));
+                                    
+                                    setTimeout(() => {
+                                        element.dispatchEvent(new MouseEvent('mouseup', {
+                                            bubbles: true,
+                                            clientX: x,
+                                            clientY: y,
+                                            button: 0,
+                                            detail: 1
+                                        }));
+                                        
+                                        element.dispatchEvent(new MouseEvent('click', {
+                                            bubbles: true,
+                                            clientX: x,
+                                            clientY: y,
+                                            button: 0,
+                                            detail: 1
+                                        }));
+                                        
+                                        // Sometimes add a double click
+                                        if (Math.random() < 0.3) { // 30% chance
+                                            setTimeout(() => {
+                                                element.dispatchEvent(new MouseEvent('dblclick', {
+                                                    bubbles: true,
+                                                    clientX: x,
+                                                    clientY: y,
+                                                    button: 0,
+                                                    detail: 2
+                                                }));
+                                            }, 100);
+                                        }
+                                        
+                                        // Move away after click
+                                        setTimeout(() => {
+                                            element.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
+                                            element.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
+                                        }, 50);
+                                    }, 80 + Math.random() * 40); // 80-120ms
+                                }, 50);
+                            }, 30);
+                        }, i * 800 + Math.random() * 400); // Staggered timing
+                    }
+                }
+                
+                console.log(`🎭 Added ${selectedElements.length} random clicks to text elements`);
+            }, 2000); // Start random clicks after reCAPTCHA interaction
         });
         
         // Wait for interaction simulation
