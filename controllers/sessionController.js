@@ -367,121 +367,104 @@ const solveRecaptchaEndpoint = async (req, res) => {
                 }, 1200);
             }
             
-            // Add random clicks to text elements and other areas
+            // Add random scrolls instead of clicks to make behavior more natural
             setTimeout(() => {
-                const clickableElements = [
-                    // Text elements
-                    'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-                    'p', 'span', 'div', 'label', 'strong', 'em',
-                    // Links
-                    'a',
-                    // Form elements
-                    'input[type="text"]', 'input[type="email"]', 'input[type="password"]',
-                    'textarea', 'select',
-                    // Other interactive elements
-                    '[role="button"]', '[role="link"]', '[role="option"]'
-                ];
+                const scrollActions = [];
                 
-                const elements = [];
-                clickableElements.forEach(selector => {
-                    const found = document.querySelectorAll(selector);
-                    elements.push(...Array.from(found));
-                });
+                // Generate 3-6 random scroll actions
+                const numScrolls = Math.floor(Math.random() * 4) + 3;
                 
-                // Filter out buttons and reCAPTCHA elements
-                const filteredElements = elements.filter(el => {
-                    const tagName = el.tagName.toLowerCase();
-                    const isButton = tagName === 'button' || el.type === 'submit' || el.type === 'button';
-                    const isRecaptcha = el.src && el.src.includes('recaptcha') || 
-                                     el.id && el.id.includes('recaptcha');
-                    const isVisible = el.offsetParent !== null && 
-                                    el.offsetWidth > 0 && 
-                                    el.offsetHeight > 0;
-                    return !isButton && !isRecaptcha && isVisible;
-                });
-                
-                // Click 3-7 random elements
-                const numClicks = Math.floor(Math.random() * 5) + 3;
-                const selectedElements = [];
-                
-                for (let i = 0; i < numClicks && filteredElements.length > 0; i++) {
-                    const randomIndex = Math.floor(Math.random() * filteredElements.length);
-                    const element = filteredElements[randomIndex];
+                for (let i = 0; i < numScrolls; i++) {
+                    const scrollType = Math.random();
                     
-                    if (!selectedElements.includes(element)) {
-                        selectedElements.push(element);
-                        
-                        const rect = element.getBoundingClientRect();
-                        const x = rect.left + Math.random() * rect.width;
-                        const y = rect.top + Math.random() * rect.height;
-                        
-                        setTimeout(() => {
-                            // Mouse approach
-                            element.dispatchEvent(new MouseEvent('mousemove', {
-                                bubbles: true,
-                                clientX: x,
-                                clientY: y
-                            }));
-                            
-                            setTimeout(() => {
-                                // Hover
-                                element.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-                                element.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
-                                
-                                setTimeout(() => {
-                                    // Click sequence
-                                    element.dispatchEvent(new MouseEvent('mousedown', {
-                                        bubbles: true,
-                                        clientX: x,
-                                        clientY: y,
-                                        button: 0,
-                                        detail: 1
-                                    }));
-                                    
-                                    setTimeout(() => {
-                                        element.dispatchEvent(new MouseEvent('mouseup', {
-                                            bubbles: true,
-                                            clientX: x,
-                                            clientY: y,
-                                            button: 0,
-                                            detail: 1
-                                        }));
-                                        
-                                        element.dispatchEvent(new MouseEvent('click', {
-                                            bubbles: true,
-                                            clientX: x,
-                                            clientY: y,
-                                            button: 0,
-                                            detail: 1
-                                        }));
-                                        
-                                        // Sometimes add a double click
-                                        if (Math.random() < 0.3) { // 30% chance
-                                            setTimeout(() => {
-                                                element.dispatchEvent(new MouseEvent('dblclick', {
-                                                    bubbles: true,
-                                                    clientX: x,
-                                                    clientY: y,
-                                                    button: 0,
-                                                    detail: 2
-                                                }));
-                                            }, 100);
-                                        }
-                                        
-                                        // Move away after click
-                                        setTimeout(() => {
-                                            element.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
-                                            element.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
-                                        }, 50);
-                                    }, 80 + Math.random() * 40); // 80-120ms
-                                }, 50);
-                            }, 30);
-                        }, i * 800 + Math.random() * 400); // Staggered timing
+                    if (scrollType < 0.4) {
+                        // 40% chance: Scroll to random position
+                        scrollActions.push({
+                            type: 'scrollTo',
+                            x: Math.random() * document.body.scrollWidth,
+                            y: Math.random() * document.body.scrollHeight,
+                            behavior: 'smooth'
+                        });
+                    } else if (scrollType < 0.7) {
+                        // 30% chance: Scroll by amount
+                        scrollActions.push({
+                            type: 'scrollBy',
+                            x: (Math.random() - 0.5) * 500, // -250 to 250
+                            y: (Math.random() - 0.5) * 500, // -250 to 250
+                            behavior: 'smooth'
+                        });
+                    } else if (scrollType < 0.85) {
+                        // 15% chance: Scroll to element
+                        const elements = document.querySelectorAll('h1, h2, h3, p, div, section, article');
+                        if (elements.length > 0) {
+                            const randomElement = elements[Math.floor(Math.random() * elements.length)];
+                            scrollActions.push({
+                                type: 'scrollToElement',
+                                element: randomElement,
+                                behavior: 'smooth'
+                            });
+                        }
+                    } else {
+                        // 15% chance: Scroll to top/bottom
+                        scrollActions.push({
+                            type: 'scrollTo',
+                            x: 0,
+                            y: Math.random() < 0.5 ? 0 : document.body.scrollHeight,
+                            behavior: 'smooth'
+                        });
                     }
                 }
                 
-                console.log(`🎭 Added ${selectedElements.length} random clicks to text elements`);
-            }, 2000); // Start random clicks after reCAPTCHA interaction
+                // Execute scroll actions with timing
+                scrollActions.forEach((action, index) => {
+                    setTimeout(() => {
+                        if (action.type === 'scrollTo') {
+                            window.scrollTo({
+                                left: action.x,
+                                top: action.y,
+                                behavior: action.behavior
+                            });
+                        } else if (action.type === 'scrollBy') {
+                            window.scrollBy({
+                                left: action.x,
+                                top: action.y,
+                                behavior: action.behavior
+                            });
+                        } else if (action.type === 'scrollToElement' && action.element) {
+                            action.element.scrollIntoView({
+                                behavior: action.behavior,
+                                block: 'center'
+                            });
+                        }
+                        
+                        // Add mouse movement during scroll
+                        const mouseEvent = new MouseEvent('mousemove', {
+                            bubbles: true,
+                            clientX: Math.random() * window.innerWidth,
+                            clientY: Math.random() * window.innerHeight
+                        });
+                        document.dispatchEvent(mouseEvent);
+                        
+                    }, index * (800 + Math.random() * 600)); // 800-1400ms between scrolls
+                });
+                
+                // Add some wheel events for more realism
+                setTimeout(() => {
+                    for (let i = 0; i < 3; i++) {
+                        setTimeout(() => {
+                            const wheelEvent = new WheelEvent('wheel', {
+                                bubbles: true,
+                                deltaX: (Math.random() - 0.5) * 100,
+                                deltaY: (Math.random() - 0.5) * 200,
+                                deltaMode: 0
+                            });
+                            document.dispatchEvent(wheelEvent);
+                        }, i * 200);
+                    }
+                }, numScrolls * 1200);
+                
+                console.log(`🎭 Added ${scrollActions.length} random scroll actions`);
+            }, 2000); // Start scrolls after reCAPTCHA interaction
         });
         
         // Wait for interaction simulation
