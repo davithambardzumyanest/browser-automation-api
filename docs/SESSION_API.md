@@ -455,25 +455,26 @@ Automatically solves reCAPTCHA challenges using 2Captcha API with advanced anti-
   "tokenPreview": "03AHJ_Vuv... (first 30 chars)",
   "submitted": false,
   "submitResult": null,
-  "solvingTime": 34256,
-  "browserFingerprint": {
-    "userAgent": "Mozilla/5.0...",
-    "platform": "Linux x86_64",
-    "language": "en-US",
-    "screenResolution": "1920x1080",
-    "timezone": "America/New_York"
+  "captcha": {
+    "siteKey": "6Lc...",
+    "isEnterprise": true,
+    "s": "optional-data-s",
+    "action": null
+  },
+  "injectionResult": {
+    "success": true,
+    "methods": ["set:g-recaptcha-response", "invoke:grecaptcha-callbacks"],
+    "responsePresent": true
   }
 }
 ```
 
 **Features:**
 - ✅ Advanced browser fingerprinting
-- ✅ Local solving simulation (25-40 seconds)
-- ✅ Random scrolls and mouse movements
-- ✅ Click at 100x100 position
+- ✅ Enterprise and `data-s` aware 2Captcha submission
+- ✅ Direct token injection into response fields and callbacks
 - ✅ Proxy support
-- ✅ Enterprise reCAPTCHA support
-- ✅ Anti-detection measures
+- ✅ Callback and widget response handling
 
 ---
 

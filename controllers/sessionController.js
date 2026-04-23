@@ -212,7 +212,6 @@ const validate2CaptchaConfig = async (page) => {
 const solveRecaptchaEndpoint = async (req, res) => {
     const { sessionId } = req.params;
     const { submitAfter = false, waitTime = 5000 } = req.body;
-
     const session = sessions.get(sessionId);
 
     if (!session) {
@@ -225,75 +224,31 @@ const solveRecaptchaEndpoint = async (req, res) => {
 
     try {
         console.log("🚀 Starting captcha solving");
-        
-        // Debug: Check if proxy is available in session
+
+        const sessionProxy = session.config?.proxy_full || session.proxy || null;
         console.log("🔐 Session proxy:", session.proxy);
         console.log("🔐 Session config proxy:", session.config?.proxy_full);
-        const sessionProxy = session.config?.proxy_full || null;
         console.log("🔐 Using proxy:", sessionProxy);
 
-        // Forward browser console logs to node
-        page.on("console", msg => console.log("BROWSER:", msg.text()));
+        if (!page.__browserConsoleForwarderAttached) {
+            page.on("console", msg => console.log("BROWSER:", msg.text()));
+            page.__browserConsoleForwarderAttached = true;
+        }
 
-        // 1️⃣ Detect reCAPTCHA sitekey and s parameter
-        const captchaInfo = await page.evaluate(() => {
-            const result = {
-                siteKey: null,
-                isEnterprise: false,
-                s: null // Capture the 's' parameter if available
-            };
-
-            const iframe = document.querySelector('iframe[src*="recaptcha"]');
-
-            if (iframe) {
-                const match = iframe.src.match(/[?&]k=([^&]+)/);
-                if (match) result.siteKey = match[1];
-
-                if (iframe.src.includes("enterprise")) {
-                    result.isEnterprise = true;
-                    const sMatch = iframe.src.match(/[?&]s=([^&]+)/);
-                    if (sMatch) {
-                        result.s = sMatch[1];  // Capture the 's' parameter
-                        console.log("🔑 Found enterprise reCAPTCHA, s parameter:", result.s); // Log s parameter
-                    }
-                }
-            }
-
-            if (!result.siteKey && window.___grecaptcha_cfg) {
-                const clients = window.___grecaptcha_cfg.clients || {};
-                for (const client of Object.values(clients)) {
-                    for (const key of Object.keys(client)) {
-                        const obj = client[key];
-                        if (obj && obj.sitekey) {
-                            result.siteKey = obj.sitekey;
-                            if (obj.enterprise) {
-                                result.isEnterprise = true;
-                                if (obj.s) result.s = obj.s; // Capture 's' from client if available
-                                console.log("🔑 Found enterprise reCAPTCHA in grecaptcha_cfg, s parameter:", result.s); // Log s parameter
-                            }
-                            break;
-                        }
-                    }
-                }
-            }
-
-            return result;
-        });
+        const captchaInfo = await extractRecaptchaInfo(page);
 
         if (!captchaInfo.siteKey) {
             return res.status(400).json({
                 success: false,
-                message: "No reCAPTCHA detected"
+                message: "No reCAPTCHA detected",
+                details: captchaInfo
             });
         }
 
         console.log("🎫 Sitekey:", captchaInfo.siteKey);
-        console.log("Enterprise:", captchaInfo.isEnterprise);
-        console.log("🔑 s Parameter:", captchaInfo.s); // Log the captured 's' parameter
-
-        // -------------------------------------------------
-        // 2️⃣ Solve captcha with 2Captcha
-        // -------------------------------------------------
+        console.log("🏢 Enterprise:", captchaInfo.isEnterprise);
+        console.log("🔑 s Parameter:", captchaInfo.s);
+        console.log("🎬 Action:", captchaInfo.action);
 
         const token = await solveRecaptchaWith2Captcha(
             page,
@@ -301,617 +256,16 @@ const solveRecaptchaEndpoint = async (req, res) => {
             page.url(),
             sessionProxy,
             captchaInfo.isEnterprise,
-            captchaInfo.s // Pass 's' if available
+            captchaInfo.s,
+            captchaInfo.action
         );
 
         console.log("🎯 Captcha solved");
 
-        // -------------------------------------------------
-        // 3️⃣ Inject token and simulate local solving
-        // -------------------------------------------------
-        
-        // First, simulate user interaction with reCAPTCHA before solving
-        console.log('🎭 Simulating user interaction with reCAPTCHA...');
-        await page.evaluate(() => {
-            // Find reCAPTCHA iframe
-            const recaptchaIframe = document.querySelector('iframe[src*="recaptcha"]');
-            if (recaptchaIframe) {
-                const rect = recaptchaIframe.getBoundingClientRect();
-                
-                // Simulate mouse movements around the reCAPTCHA
-                for (let i = 0; i < 5; i++) {
-                    setTimeout(() => {
-                        const x = rect.left + Math.random() * rect.width;
-                        const y = rect.top + Math.random() * rect.height;
-                        recaptchaIframe.dispatchEvent(new MouseEvent('mousemove', {
-                            bubbles: true,
-                            clientX: x,
-                            clientY: y
-                        }));
-                    }, i * 200);
-                }
-                
-                // Simulate hover
-                setTimeout(() => {
-                    recaptchaIframe.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-                    recaptchaIframe.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
-                }, 1000);
-                
-                // Simulate click
-                setTimeout(() => {
-                    const centerX = rect.left + rect.width / 2;
-                    const centerY = rect.top + rect.height / 2;
-                    
-                    recaptchaIframe.dispatchEvent(new MouseEvent('mousedown', {
-                        bubbles: true,
-                        clientX: centerX,
-                        clientY: centerY,
-                        button: 0
-                    }));
-                    
-                    setTimeout(() => {
-                        recaptchaIframe.dispatchEvent(new MouseEvent('mouseup', {
-                            bubbles: true,
-                            clientX: centerX,
-                            clientY: centerY,
-                            button: 0
-                        }));
-                        
-                        recaptchaIframe.dispatchEvent(new MouseEvent('click', {
-                            bubbles: true,
-                            clientX: centerX,
-                            clientY: centerY,
-                            button: 0
-                        }));
-                    }, 100);
-                }, 1200);
-            }
-            
-            // Add random scrolls instead of clicks to make behavior more natural
-            setTimeout(() => {
-                const scrollActions = [];
-                
-                // Generate 3-6 random scroll actions
-                const numScrolls = Math.floor(Math.random() * 4) + 3;
-                
-                for (let i = 0; i < numScrolls; i++) {
-                    const scrollType = Math.random();
-                    
-                    if (scrollType < 0.4) {
-                        // 40% chance: Scroll to random position
-                        scrollActions.push({
-                            type: 'scrollTo',
-                            x: Math.random() * document.body.scrollWidth,
-                            y: Math.random() * document.body.scrollHeight,
-                            behavior: 'smooth'
-                        });
-                    } else if (scrollType < 0.7) {
-                        // 30% chance: Scroll by amount
-                        scrollActions.push({
-                            type: 'scrollBy',
-                            x: (Math.random() - 0.5) * 500, // -250 to 250
-                            y: (Math.random() - 0.5) * 500, // -250 to 250
-                            behavior: 'smooth'
-                        });
-                    } else if (scrollType < 0.85) {
-                        // 15% chance: Scroll to element
-                        const elements = document.querySelectorAll('h1, h2, h3, p, div, section, article');
-                        if (elements.length > 0) {
-                            const randomElement = elements[Math.floor(Math.random() * elements.length)];
-                            scrollActions.push({
-                                type: 'scrollToElement',
-                                element: randomElement,
-                                behavior: 'smooth'
-                            });
-                        }
-                    } else {
-                        // 15% chance: Scroll to top/bottom
-                        scrollActions.push({
-                            type: 'scrollTo',
-                            x: 0,
-                            y: Math.random() < 0.5 ? 0 : document.body.scrollHeight,
-                            behavior: 'smooth'
-                        });
-                    }
-                }
-                
-                // Execute scroll actions with timing
-                scrollActions.forEach((action, index) => {
-                    setTimeout(() => {
-                        if (action.type === 'scrollTo') {
-                            window.scrollTo({
-                                left: action.x,
-                                top: action.y,
-                                behavior: action.behavior
-                            });
-                        } else if (action.type === 'scrollBy') {
-                            window.scrollBy({
-                                left: action.x,
-                                top: action.y,
-                                behavior: action.behavior
-                            });
-                        } else if (action.type === 'scrollToElement' && action.element) {
-                            action.element.scrollIntoView({
-                                behavior: action.behavior,
-                                block: 'center'
-                            });
-                        }
-                        
-                        // Add mouse movement during scroll
-                        const mouseEvent = new MouseEvent('mousemove', {
-                            bubbles: true,
-                            clientX: Math.random() * window.innerWidth,
-                            clientY: Math.random() * window.innerHeight
-                        });
-                        document.dispatchEvent(mouseEvent);
-                        
-                    }, index * (800 + Math.random() * 600)); // 800-1400ms between scrolls
-                });
-                
-                // Add some wheel events for more realism
-                setTimeout(() => {
-                    for (let i = 0; i < 3; i++) {
-                        setTimeout(() => {
-                            const wheelEvent = new WheelEvent('wheel', {
-                                bubbles: true,
-                                deltaX: (Math.random() - 0.5) * 100,
-                                deltaY: (Math.random() - 0.5) * 200,
-                                deltaMode: 0
-                            });
-                            document.dispatchEvent(wheelEvent);
-                        }, i * 200);
-                    }
-                }, numScrolls * 1200);
-                
-                console.log(`🎭 Added ${scrollActions.length} random scroll actions`);
-            }, 2000); // Start scrolls after reCAPTCHA interaction
-            
-            // Add click to top part at 100px x 100px coordinates
-            setTimeout(() => {
-                const clickX = 100;
-                const clickY = 100;
-                
-                // Find element at the click position
-                const elementAtPosition = document.elementFromPoint(clickX, clickY);
-                
-                if (elementAtPosition) {
-                    console.log(`🎭 Clicking element at 100x100: ${elementAtPosition.tagName}`);
-                    
-                    // Mouse approach to the position
-                    setTimeout(() => {
-                        const approachEvent = new MouseEvent('mousemove', {
-                            bubbles: true,
-                            clientX: clickX,
-                            clientY: clickY
-                        });
-                        document.dispatchEvent(approachEvent);
-                    }, 100);
-                    
-                    // Hover over the position
-                    setTimeout(() => {
-                        const hoverEvents = [
-                            new MouseEvent('mouseover', { bubbles: true, clientX: clickX, clientY: clickY }),
-                            new MouseEvent('mouseenter', { bubbles: true, clientX: clickX, clientY: clickY })
-                        ];
-                        hoverEvents.forEach(event => elementAtPosition.dispatchEvent(event));
-                    }, 300);
-                    
-                    // Click sequence at the exact position
-                    setTimeout(() => {
-                        // Mousedown
-                        elementAtPosition.dispatchEvent(new MouseEvent('mousedown', {
-                            bubbles: true,
-                            clientX: clickX,
-                            clientY: clickY,
-                            button: 0,
-                            detail: 1
-                        }));
-                        
-                        // Mouseup after short delay
-                        setTimeout(() => {
-                            elementAtPosition.dispatchEvent(new MouseEvent('mouseup', {
-                                bubbles: true,
-                                clientX: clickX,
-                                clientY: clickY,
-                                button: 0,
-                                detail: 1
-                            }));
-                            
-                            // Click event
-                            elementAtPosition.dispatchEvent(new MouseEvent('click', {
-                                bubbles: true,
-                                clientX: clickX,
-                                clientY: clickY,
-                                button: 0,
-                                detail: 1
-                            }));
-                            
-                            // Move away after click
-                            setTimeout(() => {
-                                elementAtPosition.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
-                                elementAtPosition.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
-                            }, 50);
-                            
-                        }, 80 + Math.random() * 40); // 80-120ms
-                    }, 500);
-                } else {
-                    console.log('🎭 No element found at 100x100, clicking document directly');
-                    
-                    // Click directly on document at the position
-                    setTimeout(() => {
-                        document.dispatchEvent(new MouseEvent('mousedown', {
-                            bubbles: true,
-                            clientX: clickX,
-                            clientY: clickY,
-                            button: 0
-                        }));
-                        
-                        setTimeout(() => {
-                            document.dispatchEvent(new MouseEvent('mouseup', {
-                                bubbles: true,
-                                clientX: clickX,
-                                clientY: clickY,
-                                button: 0
-                            }));
-                            
-                            document.dispatchEvent(new MouseEvent('click', {
-                                bubbles: true,
-                                clientX: clickX,
-                                clientY: clickY,
-                                button: 0
-                            }));
-                        }, 100);
-                    }, 300);
-                }
-            }, 1500); // Click after 1.5 seconds
-        });
-        
-        // Wait for interaction simulation
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        
-        // Now inject token with advanced local solving simulation
-        console.log('💉 Injecting token with advanced local solving simulation...');
-        await page.evaluate((token) => {
-            console.log("🎭 Starting advanced local solving simulation");
-            
-            // Record solving start time and create solving context
-            window.__recaptchaSolveStart = Date.now();
-            window.__recaptchaLocalSolving = true;
-            window.__recaptchaSolvingSteps = [];
-            
-            // Create realistic solving timeline
-            const solveSteps = {
-                initialFocus: 200 + Math.random() * 300,      // 200-500ms
-                iframeInteraction: 800 + Math.random() * 400,   // 800-1200ms
-                challengeAppear: 1200 + Math.random() * 800,   // 1200-2000ms
-                userThinking: 2000 + Math.random() * 1000,  // 2000-3000ms
-                startSolving: 3500 + Math.random() * 1500,  // 3500-5000ms
-                solvingProcess: 8000 + Math.random() * 12000, // 8000-20000ms
-                verification: 2000 + Math.random() * 1000       // 2000-3000ms
-            };
-            
-            // Step 1: Initial page focus and scroll
-            setTimeout(() => {
-                window.focus();
-                window.scrollTo(0, document.body.scrollHeight / 2);
-                window.__recaptchaSolvingSteps.push('page_focused_and_scrolled');
-            }, solveSteps.initialFocus);
-            
-            // Step 2: Find and interact with reCAPTCHA iframe
-            setTimeout(() => {
-                const recaptchaIframe = document.querySelector('iframe[src*="recaptcha"]');
-                if (recaptchaIframe) {
-                    const rect = recaptchaIframe.getBoundingClientRect();
-                    
-                    // Simulate realistic mouse approach
-                    const approachPoints = [
-                        { x: rect.left - 50, y: rect.top - 20 },
-                        { x: rect.left + 20, y: rect.top + 10 },
-                        { x: rect.left + rect.width / 2, y: rect.top - 10 }
-                    ];
-                    
-                    approachPoints.forEach((point, index) => {
-                        setTimeout(() => {
-                            recaptchaIframe.dispatchEvent(new MouseEvent('mousemove', {
-                                bubbles: true,
-                                clientX: point.x,
-                                clientY: point.y
-                            }));
-                        }, index * 150);
-                    });
-                    
-                    // Hover over reCAPTCHA
-                    setTimeout(() => {
-                        recaptchaIframe.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-                        recaptchaIframe.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
-                        window.__recaptchaSolvingSteps.push('iframe_hovered');
-                    }, 600);
-                }
-            }, solveSteps.iframeInteraction);
-            
-            // Step 3: Wait for challenge to appear and click
-            setTimeout(() => {
-                const recaptchaIframe = document.querySelector('iframe[src*="recaptcha"]');
-                if (recaptchaIframe) {
-                    const rect = recaptchaIframe.getBoundingClientRect();
-                    const centerX = rect.left + rect.width / 2;
-                    const centerY = rect.top + rect.height / 2;
-                    
-                    // Realistic click sequence with pressure variations
-                    setTimeout(() => {
-                        recaptchaIframe.dispatchEvent(new MouseEvent('mousedown', {
-                            bubbles: true,
-                            clientX: centerX + (Math.random() - 0.5) * 2,
-                            clientY: centerY + (Math.random() - 0.5) * 2,
-                            button: 0,
-                            pressure: 0.7 + Math.random() * 0.3
-                        }));
-                    }, 200);
-                    
-                    setTimeout(() => {
-                        recaptchaIframe.dispatchEvent(new MouseEvent('mouseup', {
-                            bubbles: true,
-                            clientX: centerX + (Math.random() - 0.5) * 2,
-                            clientY: centerY + (Math.random() - 0.5) * 2,
-                            button: 0,
-                            pressure: 0.3 + Math.random() * 0.4
-                        }));
-                    }, 350);
-                    
-                    setTimeout(() => {
-                        recaptchaIframe.dispatchEvent(new MouseEvent('click', {
-                            bubbles: true,
-                            clientX: centerX,
-                            clientY: centerY,
-                            button: 0,
-                            detail: 1
-                        }));
-                        window.__recaptchaSolvingSteps.push('iframe_clicked');
-                    }, 400);
-                }
-            }, solveSteps.challengeAppear);
-            
-            // Step 4: User thinking time before solving
-            setTimeout(() => {
-                // Simulate user reading and understanding the challenge
-                window.__recaptchaSolvingSteps.push('user_thinking');
-                
-                // Add some random mouse movements during thinking
-                for (let i = 0; i < 3; i++) {
-                    setTimeout(() => {
-                        document.dispatchEvent(new MouseEvent('mousemove', {
-                            bubbles: true,
-                            clientX: Math.random() * window.innerWidth,
-                            clientY: Math.random() * window.innerHeight
-                        }));
-                    }, i * 300);
-                }
-            }, solveSteps.userThinking);
-            
-            // Step 5: Start solving process
-            setTimeout(() => {
-                window.__recaptchaSolvingSteps.push('solving_started');
-                
-                // Find and prepare textarea
-                let textarea = document.getElementById("g-recaptcha-response");
-                if (!textarea) {
-                    textarea = document.createElement("textarea");
-                    textarea.id = "g-recaptcha-response";
-                    textarea.name = "g-recaptcha-response";
-                    textarea.style.display = "none";
-                    document.body.appendChild(textarea);
-                    window.__recaptchaSolvingSteps.push('textarea_created');
-                }
-                
-                // Simulate realistic typing with variations
-                let currentValue = '';
-                const baseTypingSpeed = 70 + Math.random() * 50; // 70-120ms base
-                const typingVariations = [0.8, 1.2, 0.9, 1.1, 1.0]; // Speed variations
-                
-                const typeCharacter = (index) => {
-                    if (index < token.length) {
-                        currentValue += token[index];
-                        textarea.value = currentValue;
-                        
-                        const currentSpeed = baseTypingSpeed * (typingVariations[index % typingVariations.length]);
-                        
-                        // Comprehensive keyboard events
-                        const keyEvents = [
-                            new KeyboardEvent('keydown', {
-                                bubbles: true,
-                                key: token[index],
-                                code: `Key${token[index].toUpperCase()}`,
-                                keyCode: token.charCodeAt(index),
-                                charCode: token.charCodeAt(index),
-                                which: token.charCodeAt(index),
-                                location: 0,
-                                altKey: false,
-                                ctrlKey: false,
-                                shiftKey: false,
-                                metaKey: false
-                            }),
-                            new Event('input', { bubbles: true }),
-                            new KeyboardEvent('keyup', {
-                                bubbles: true,
-                                key: token[index],
-                                code: `Key${token[index].toUpperCase()}`,
-                                keyCode: token.charCodeAt(index),
-                                charCode: token.charCodeAt(index),
-                                which: token.charCodeAt(index),
-                                location: 0,
-                                altKey: false,
-                                ctrlKey: false,
-                                shiftKey: false,
-                                metaKey: false
-                            })
-                        ];
-                        
-                        // Dispatch events with realistic timing
-                        keyEvents.forEach((event, eventIndex) => {
-                            setTimeout(() => {
-                                textarea.dispatchEvent(event);
-                            }, eventIndex * 5);
-                        });
-                        
-                        window.__recaptchaSolvingSteps.push(`typed_char_${index}_${currentSpeed.toFixed(0)}ms`);
-                        
-                        // Add occasional pauses and corrections
-                        if (Math.random() < 0.1 && index > 0) { // 10% chance of pause
-                            setTimeout(() => {
-                                // Simulate backspace and correction
-                                textarea.dispatchEvent(new KeyboardEvent('keydown', {
-                                    bubbles: true,
-                                    key: 'Backspace',
-                                    keyCode: 8,
-                                    which: 8
-                                }));
-                                
-                                currentValue = currentValue.slice(0, -1);
-                                textarea.value = currentValue;
-                                
-                                setTimeout(() => {
-                                    typeCharacter(index); // Retry same character
-                                }, 150);
-                            }, currentSpeed);
-                        } else {
-                            setTimeout(() => typeCharacter(index + 1), currentSpeed);
-                        }
-                    } else {
-                        // Token fully typed - completion sequence
-                        setTimeout(() => {
-                            textarea.dispatchEvent(new Event('change', { bubbles: true }));
-                            textarea.dispatchEvent(new Event('blur', { bubbles: true }));
-                            window.__recaptchaSolvingSteps.push('token_completed');
-                            
-                            // Store token and completion data
-                            window.__captchaToken = token;
-                            window.__recaptchaSolveEnd = Date.now();
-                            window.__recaptchaSolveTime = window.__recaptchaSolveEnd - window.__recaptchaSolveStart;
-                            
-                            // Final verification events
-                            const completionEvents = [
-                                new Event('change', { bubbles: true }),
-                                new Event('input', { bubbles: true }),
-                                new CustomEvent('recaptcha.success', { bubbles: true, detail: { token } }),
-                                new CustomEvent('captcha.completed', { bubbles: true, detail: { 
-                                    token, 
-                                    solveTime: window.__recaptchaSolveTime,
-                                    steps: window.__recaptchaSolvingSteps 
-                                }})
-                            ];
-                            
-                            completionEvents.forEach((event, index) => {
-                                setTimeout(() => {
-                                    textarea.dispatchEvent(event);
-                                    document.dispatchEvent(event);
-                                }, index * 100);
-                            });
-                            
-                            console.log('🎭 Advanced local solving completed in', window.__recaptchaSolveTime, 'ms');
-                            console.log('🎭 Total solving steps:', window.__recaptchaSolvingSteps.length);
-                            console.log('🎭 Solving timeline:', solveSteps);
-                            
-                        }, 500);
-                    }
-                };
-                
-                // Start typing with initial delay
-                setTimeout(() => typeCharacter(0), 300 + Math.random() * 200);
-                
-            }, solveSteps.startSolving);
-            
-        }, token);
-        
-        // Wait for advanced simulation to complete
-        await new Promise(resolve => setTimeout(resolve, 25000)); // Wait 25 seconds for full simulation
+        const injectionResult = await injectRecaptchaToken(page, token, captchaInfo);
+        console.log("💉 Token injection result:", injectionResult);
 
-        // -------------------------------------------------
-        // 4️⃣ Trigger grecaptcha execution
-        // -------------------------------------------------
-        await page.evaluate(() => {
-            if (!window.grecaptcha) return;
-
-            console.log("⚡ Triggering grecaptcha");
-
-            try {
-                if (window.grecaptcha.enterprise?.execute) {
-                    window.grecaptcha.enterprise.execute();
-                }
-
-                if (window.grecaptcha.execute) {
-                    window.grecaptcha.execute();
-                }
-
-            } catch (e) {
-                console.log("execute error", e);
-            }
-
-        }, token);
-
-        // -------------------------------------------------
-        // 5️⃣ Trigger internal callbacks with safe recursion
-        // -------------------------------------------------
-        await page.evaluate((token) => {
-            console.log("🔔 Triggering callbacks");
-
-            // Use a Set to track visited objects and avoid infinite recursion
-            const visited = new Set();
-
-            function searchCallbacks(obj) {
-                if (!obj || typeof obj !== "object") return;
-
-                // If we've already visited this object, avoid recursion
-                if (visited.has(obj)) return;
-                visited.add(obj);
-
-                for (const key in obj) {
-                    const val = obj[key];
-
-                    if (key === "callback" && typeof val === "function") {
-                        try {
-                            console.log("Calling callback");
-                            val(token);
-                        } catch (e) {
-                            console.log("callback error", e);
-                        }
-                    }
-
-                    if (typeof val === "object") {
-                        searchCallbacks(val);
-                    }
-                }
-            }
-
-            if (window.___grecaptcha_cfg?.clients) {
-                Object.values(window.___grecaptcha_cfg.clients).forEach(client => searchCallbacks(client));
-            }
-
-        }, token);
-
-        // -------------------------------------------------
-        // 6️⃣ Fire generic success events
-        // -------------------------------------------------
-        await page.evaluate(() => {
-            const events = [
-                "captcha-success",
-                "recaptcha-success",
-                "verification-complete"
-            ];
-
-            events.forEach(name => {
-                document.dispatchEvent(new Event(name, { bubbles: true }));
-            });
-
-        });
-
-        // -------------------------------------------------
-        // 7️⃣ Wait for page logic
-        // -------------------------------------------------
-        await new Promise(r => setTimeout(r, waitTime));
-
-        // -------------------------------------------------
-        // 8️⃣ Optional submit
-        // -------------------------------------------------
+        await new Promise(resolve => setTimeout(resolve, waitTime));
 
         let submitResult = null;
         if (submitAfter) {
@@ -920,7 +274,7 @@ const solveRecaptchaEndpoint = async (req, res) => {
                 for (const btn of buttons) {
                     if (!btn.disabled && btn.offsetParent !== null) {
                         btn.click();
-                        return { success: true, text: btn.innerText || btn.value };
+                        return { success: true, text: btn.innerText || btn.value || null };
                     }
                 }
                 return { success: false };
@@ -929,11 +283,18 @@ const solveRecaptchaEndpoint = async (req, res) => {
 
         return res.json({
             success: true,
+            sessionId,
             tokenPreview: token.substring(0, 30) + "...",
             submitted: submitAfter,
-            submitResult
+            submitResult,
+            captcha: {
+                siteKey: captchaInfo.siteKey,
+                isEnterprise: captchaInfo.isEnterprise,
+                s: captchaInfo.s || null,
+                action: captchaInfo.action || null
+            },
+            injectionResult
         });
-
     } catch (error) {
         console.error("Captcha solving error:", error);
         return res.status(500).json({
@@ -1164,6 +525,230 @@ const diagnose2Captcha = async (page) => {
     return diagnostics;
 };
 
+const extractRecaptchaInfo = async (page) => {
+    return await page.evaluate(() => {
+        const result = {
+            siteKey: null,
+            isEnterprise: false,
+            s: null,
+            action: null,
+            widgetIds: [],
+            iframeSources: []
+        };
+
+        const iframes = Array.from(document.querySelectorAll('iframe[src*="recaptcha"]'));
+        result.iframeSources = iframes.map((iframe) => iframe.src);
+
+        for (const iframe of iframes) {
+            try {
+                const url = new URL(iframe.src);
+                const siteKey = url.searchParams.get('k');
+                const dataS = url.searchParams.get('s');
+
+                if (siteKey && !result.siteKey) {
+                    result.siteKey = siteKey;
+                }
+
+                if (dataS && !result.s) {
+                    result.s = dataS;
+                }
+
+                if (iframe.src.includes('/enterprise/')) {
+                    result.isEnterprise = true;
+                }
+            } catch (error) {
+                console.log('Failed to parse reCAPTCHA iframe URL:', error.message);
+            }
+        }
+
+        const siteKeyElement = document.querySelector('[data-sitekey], [data-site-key]');
+        if (!result.siteKey && siteKeyElement) {
+            result.siteKey =
+                siteKeyElement.getAttribute('data-sitekey') ||
+                siteKeyElement.getAttribute('data-site-key');
+        }
+
+        const visited = new Set();
+        const callbacks = [];
+
+        const scan = (value, currentWidgetId = null) => {
+            if (!value || (typeof value !== 'object' && typeof value !== 'function')) {
+                return;
+            }
+
+            if (visited.has(value)) {
+                return;
+            }
+            visited.add(value);
+
+            if (typeof value.sitekey === 'string' && !result.siteKey) {
+                result.siteKey = value.sitekey;
+            }
+
+            if (value.enterprise === true) {
+                result.isEnterprise = true;
+            }
+
+            if (typeof value.s === 'string' && !result.s) {
+                result.s = value.s;
+            }
+
+            if (typeof value.action === 'string' && !result.action) {
+                result.action = value.action;
+            }
+
+            if (typeof value.callback === 'function' || typeof value.callback === 'string') {
+                callbacks.push({ widgetId: currentWidgetId, callbackType: typeof value.callback });
+            }
+
+            for (const [key, nested] of Object.entries(value)) {
+                const nextWidgetId = key.match(/^\d+$/) ? key : currentWidgetId;
+                scan(nested, nextWidgetId);
+            }
+        };
+
+        if (window.___grecaptcha_cfg?.clients) {
+            for (const [widgetId, client] of Object.entries(window.___grecaptcha_cfg.clients)) {
+                result.widgetIds.push(widgetId);
+                scan(client, widgetId);
+            }
+        }
+
+        result.widgetIds = [...new Set(result.widgetIds)];
+        result.callbackCount = callbacks.length;
+
+        return result;
+    });
+};
+
+const injectRecaptchaToken = async (page, token, captchaInfo) => {
+    return await page.evaluate(({ token, captchaInfo }) => {
+        const methods = [];
+        const callbackResults = [];
+        const widgetIds = Array.isArray(captchaInfo.widgetIds) ? captchaInfo.widgetIds : [];
+
+        const ensureTextarea = (id, name) => {
+            let textarea = document.getElementById(id);
+
+            if (!textarea) {
+                textarea = document.createElement('textarea');
+                textarea.id = id;
+                textarea.name = name;
+                textarea.style.display = 'none';
+                (document.body || document.documentElement).appendChild(textarea);
+                methods.push(`created:${id}`);
+            }
+
+            textarea.value = token;
+            textarea.textContent = token;
+            textarea.setAttribute('value', token);
+            textarea.dispatchEvent(new Event('input', { bubbles: true }));
+            textarea.dispatchEvent(new Event('change', { bubbles: true }));
+            return textarea;
+        };
+
+        ensureTextarea('g-recaptcha-response', 'g-recaptcha-response');
+        methods.push('set:g-recaptcha-response');
+
+        for (const widgetId of widgetIds) {
+            ensureTextarea(`g-recaptcha-response-${widgetId}`, `g-recaptcha-response-${widgetId}`);
+            methods.push(`set:g-recaptcha-response-${widgetId}`);
+        }
+
+        if (window.grecaptcha && typeof window.grecaptcha.getResponse === 'function') {
+            const originalGetResponse = window.grecaptcha.getResponse.bind(window.grecaptcha);
+            window.grecaptcha.getResponse = function(widgetId) {
+                if (widgetId === undefined || widgetIds.includes(String(widgetId))) {
+                    return token;
+                }
+                return originalGetResponse(widgetId);
+            };
+            methods.push('hook:getResponse');
+        }
+
+        if (window.grecaptcha && typeof window.grecaptcha.execute === 'function') {
+            const originalExecute = window.grecaptcha.execute.bind(window.grecaptcha);
+            window.grecaptcha.execute = function(...args) {
+                try {
+                    return Promise.resolve(token);
+                } catch (error) {
+                    return originalExecute(...args);
+                }
+            };
+            methods.push('hook:execute');
+        }
+
+        if (window.grecaptcha?.enterprise && typeof window.grecaptcha.enterprise.execute === 'function') {
+            const originalEnterpriseExecute = window.grecaptcha.enterprise.execute.bind(window.grecaptcha.enterprise);
+            window.grecaptcha.enterprise.execute = function(...args) {
+                try {
+                    return Promise.resolve(token);
+                } catch (error) {
+                    return originalEnterpriseExecute(...args);
+                }
+            };
+            methods.push('hook:enterprise.execute');
+        }
+
+        const visited = new Set();
+        const invokeCallbacks = (value) => {
+            if (!value || typeof value !== 'object') {
+                return;
+            }
+
+            if (visited.has(value)) {
+                return;
+            }
+            visited.add(value);
+
+            if (typeof value.callback === 'function') {
+                try {
+                    value.callback(token);
+                    callbackResults.push({ type: 'function', ok: true });
+                } catch (error) {
+                    callbackResults.push({ type: 'function', ok: false, message: error.message });
+                }
+            }
+
+            if (typeof value.callback === 'string') {
+                try {
+                    const callbackFn = window[value.callback];
+                    if (typeof callbackFn === 'function') {
+                        callbackFn(token);
+                        callbackResults.push({ type: 'string', ok: true, name: value.callback });
+                    }
+                } catch (error) {
+                    callbackResults.push({ type: 'string', ok: false, message: error.message, name: value.callback });
+                }
+            }
+
+            for (const nested of Object.values(value)) {
+                invokeCallbacks(nested);
+            }
+        };
+
+        if (window.___grecaptcha_cfg?.clients) {
+            Object.values(window.___grecaptcha_cfg.clients).forEach((client) => invokeCallbacks(client));
+            methods.push('invoke:grecaptcha-callbacks');
+        }
+
+        window.__captchaToken = token;
+        window.__solvedRecaptchaToken = token;
+        document.dispatchEvent(new CustomEvent('recaptcha-token-injected', { detail: { token } }));
+        methods.push('store:window');
+        methods.push('dispatch:recaptcha-token-injected');
+
+        return {
+            success: true,
+            methods: [...new Set(methods)],
+            callbackResults,
+            widgetIds,
+            responsePresent: Array.from(document.querySelectorAll('textarea[name^="g-recaptcha-response"]'))
+                .some((el) => el.value === token)
+        };
+    }, { token, captchaInfo });
+};
+
 /**
  * Solve reCAPTCHA using 2Captcha API with proxy support
  * @param {Object} page - Puppeteer page object
@@ -1172,7 +757,7 @@ const diagnose2Captcha = async (page) => {
  * @param {Object} proxy - Proxy configuration (optional)
  * @returns {Promise<string>} The solved reCAPTCHA token
  */
-const solveRecaptchaWith2Captcha = async (page, siteKey, pageUrl, proxy = null, s = null) => {
+const solveRecaptchaWith2Captcha = async (page, siteKey, pageUrl, proxy = null, isEnterprise = false, s = null, action = null) => {
     const API_KEY = process.env.TWO_CAPTCHA_API_KEY;
     
     if (!API_KEY) {
@@ -1255,13 +840,24 @@ const solveRecaptchaWith2Captcha = async (page, siteKey, pageUrl, proxy = null, 
             googlekey: siteKey,
             pageurl: pageUrl,
             invisible: 0,
-            enterprise: 1,
             version: 'v2',
-            action: 'signin',
             soft_id: 2834,
             header_acao: 1,
-            json: 1
+            json: 1,
+            userAgent: browserInfo.userAgent
         };
+
+        if (isEnterprise) {
+            apiParams.enterprise = 1;
+        }
+
+        if (s) {
+            apiParams['data-s'] = s;
+        }
+
+        if (action) {
+            apiParams.action = action;
+        }
 
         // Add proxy parameters if proxy is available
         if (proxy) {
@@ -1293,7 +889,7 @@ const solveRecaptchaWith2Captcha = async (page, siteKey, pageUrl, proxy = null, 
 
         console.log('📤 API Parameters:', {
             ...apiParams,
-            datas: JSON.parse(apiParams.datas || '{}')
+            key: '***hidden***'
         });
 
         // Send captcha to 2Captcha
@@ -1302,6 +898,10 @@ const solveRecaptchaWith2Captcha = async (page, siteKey, pageUrl, proxy = null, 
             params: apiParams,
             timeout: 30000
         });
+
+        if (!response.data || response.data.status !== 1 || !response.data.request) {
+            throw new Error(`2Captcha submit failed: ${response.data?.request || 'Unknown error'}`);
+        }
 
         const captchaId = response.data.request;
         console.log(`🎫 Captcha ID: ${captchaId}`);
