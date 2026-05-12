@@ -1,6 +1,7 @@
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const { chromium } = require('playwright');
+const { cleanupStaleProfileLocks } = require('../utils/browserProfile');
 
 // Add stealth plugin
 puppeteer.use(StealthPlugin());
@@ -29,6 +30,8 @@ const initBrowser = async (profileId) => {
     const userDataDir = getUserDataDir(profileId);
     
     if (!browsers.has(userDataDir)) {
+        cleanupStaleProfileLocks(userDataDir);
+
         const browserInstance = await puppeteer.launch({ 
             headless: 'new',
             args: BROWSER_ARGS,

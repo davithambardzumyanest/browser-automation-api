@@ -116,7 +116,13 @@ app.use((err, req, res, next) => {
 app.listen(PORT, async () => {
     console.log(`API is running at http://localhost:${PORT}`);
     console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+
     // Pre-initialize browser
-    await getBrowser();
-    console.log('Browser initialized');
+    try {
+        await getBrowser();
+        console.log('Browser initialized');
+    } catch (error) {
+        console.error('Browser pre-initialization failed:', error.message);
+        console.error('Browser will be initialized on the next browser API request.');
+    }
 });

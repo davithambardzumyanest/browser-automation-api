@@ -1,6 +1,7 @@
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const { v4: uuidv4 } = require('uuid');
+const { cleanupStaleProfileLocks } = require('../utils/browserProfile');
 
 // Add stealth plugin
 puppeteer.use(StealthPlugin());
@@ -1749,6 +1750,10 @@ const createSession = async (req, res) => {
         } else if (userDataDir) {
             // Fallback to session-based directory if no profileId but userDataDir is true
             launchOptions.userDataDir = `./sessions/${sessionId}`;
+        }
+
+        if (launchOptions.userDataDir) {
+            cleanupStaleProfileLocks(launchOptions.userDataDir);
         }
         
         // Set locale settings
