@@ -3976,26 +3976,26 @@ const simulateUserActions = async (req, res) => {
         // Start the simulation in the background
         (async () => {
             console.log(`Starting user simulation for session ${sessionId} for ${durationMinutes} minutes`);
-            
+
             // Initial delay to make it seem more natural
             await wait(randomDelay(1000, 3000));
-            
+
             while (Date.now() < endTime) {
                 try {
                     // Ensure we're still on the correct URL before each action
                     await ensureCorrectUrl(page, targetUrl);
-                    
+
                     const action = getRandomAction();
-                    
+
                     switch(action) {
                         case 'SCROLL':
                             await randomScroll(page);
                             break;
-                            
+
                         case 'WHEEL_SCROLL':
                             await randomWheelScroll(page);
                             break;
-                            
+
                         case 'MOUSE_MOVE':
                             await randomMouseMovements(page);
                             // Sometimes click on random elements
@@ -4004,7 +4004,7 @@ const simulateUserActions = async (req, res) => {
                                 await randomClicks(page);
                             }
                             break;
-                            
+
                         case 'TYPING':
                             // Don't type too often in a short period
                             const now = Date.now();
@@ -4012,18 +4012,18 @@ const simulateUserActions = async (req, res) => {
                                 try {
                                     // Double check URL before typing
                                     await ensureCorrectUrl(page, targetUrl);
-                                    
+
                                     // Try to find and interact with input fields
                                     const success = await fillRandomForms(page);
-                                    
+
                                     if (success) {
                                         console.log('Successfully typed in form field');
                                     } else {
                                         console.log('No suitable input field found for typing');
                                     }
-                                    
+
                                     lastTypingTime = now;
-                                    
+
                                     // Sometimes clear after typing (20% chance)
                                     if (Math.random() < 0.2) {
                                         await clearGoogleSearch(page);
@@ -4035,7 +4035,7 @@ const simulateUserActions = async (req, res) => {
                                 }
                             }
                             break;
-                            
+
                         case 'NAVIGATION':
                             // Randomly choose between tab switching and history navigation
                             if (Math.random() < 0.7) {
@@ -4044,37 +4044,37 @@ const simulateUserActions = async (req, res) => {
                                 await navigateHistory(page);
                             }
                             break;
-                            
+
                         case 'REFRESH':
                             if (Math.random() < 0.3) { // 30% chance to actually refresh
-                                await page.reload({ 
+                                await page.reload({
                                     waitUntil: ['domcontentloaded', 'networkidle0'],
                                     timeout: 30000
                                 });
-                                await wait(randomDelay(2000, 5000));
+                                await wait(randomDelay(1000, 5000));
                             }
                             break;
-                            
+
                         case 'IDLE':
                             // Random idle time (simulating reading/thinking)
-                            await wait(randomDelay(2000, 10000));
+                            await wait(randomDelay(1000, 5000));
                             break;
                     }
-                    
+
                     // Variable delay between actions (shorter for some actions)
-                    const baseDelay = ['TYPING', 'IDLE'].includes(action) 
-                        ? randomDelay(500, 1500) 
-                        : randomDelay(800, 3000);
-                        
+                    const baseDelay = ['TYPING', 'IDLE'].includes(action)
+                        ? randomDelay(100, 600)
+                        : randomDelay(300, 1000);
+
                     await wait(baseDelay);
-                    
+
                 } catch (error) {
                     console.error('Error during simulation:', error.message);
                     // Continue with the next action after a short delay
                     await wait(randomDelay(1000, 3000));
                 }
             }
-            
+
             console.log(`User simulation completed for session ${sessionId}`);
         })();
         
