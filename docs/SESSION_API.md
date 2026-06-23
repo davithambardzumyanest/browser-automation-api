@@ -1,36 +1,42 @@
-# Browser Automation API - Session Management
+Add Docs# Session API Documentation
 
-Complete documentation for all session management endpoints in the Browser Automation API.
+This document covers only the session endpoints exposed by `routes/sessionRoutes.js`.
 
-## Table of Contents
+Base path: `/api/session`
 
-- [Session Management](#session-management)
-- [Navigation & Page Control](#navigation--page-control)
-- [Element Interaction](#element-interaction)
-- [Content & Data Retrieval](#content--data-retrieval)
-- [reCAPTCHA & Anti-Bot](#recaptcha--anti-bot)
-- [Advanced Features](#advanced-features)
-- [Error Handling](#error-handling)
+## Common behavior
+
+- Session-scoped endpoints require `:sessionId` that must exist in memory.
+- Most endpoints update session activity (`lastUsed` or `lastActivity`) to keep the session alive.
+- Common not-found response:
+
+```json
+{
+  "error": "Session not found",
+  "message": "Session <sessionId> does not exist or has expired"
+}
+```
 
 ---
 
-## Session Management
+## 1) Create Session
 
-### Create Session
-**POST** `/api/session/create`
+**POST** `/create`
 
-Creates a new browser session with customizable options.
+Creates a new browser instance and page, applies anti-detection settings, headers, optional proxy/geolocation/timezone, and stores it in the in-memory session map.
 
-**Request Body:**
+### Request body (example)
+
 ```json
 {
   "headless": true,
-  "slowMo": 0,
-  "viewport": {
-    "width": 1920,
-    "height": 1080
+  "width": 1920,
+  "height": 1080,
+  "locale": "en-US",
+  "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)...",
+  "headers": {
+    "Accept-Language": "en-US,en;q=0.9"
   },
-  "userAgent": "Mozilla/5.0...",
   "proxy": {
     "server": "http://proxy.example.com:8080",
     "username": "user",
@@ -39,123 +45,147 @@ Creates a new browser session with customizable options.
   },
   "geolocation": {
     "latitude": 40.7128,
-    "longitude": -74.0060,
-    "accuracy": 100
+    "longitude": -74.006,
+    "accuracy": 50
   },
-  "locale": "en-US",
-  "timezone": "America/New_York"
+  "geolocationOrigins": [
+    "https://www.google.com"
+  ],
+  "grantGeolocationOnNavigation": true,
+  "timezone": "America/New_York",
+  "slowMo": 0,
+  "devtools": false,
+  "allowMedia": false,
+  "stealth": true
 }
 ```
 
-**Response:**
+### Success response
+
 ```json
 {
   "success": true,
-  "sessionId": "uuid-v4-session-id",
-  "browserInfo": {
-    "userAgent": "Mozilla/5.0...",
-    "viewport": {
-      "width": 1920,
-      "height": 1080
-    },
-    "headless": true
-  },
-  "timestamp": "2026-03-19T10:14:00.000Z"
+  "sessionId": "550e8400-e29b-41d4-a716-446655440000",
+  "message": "Session created successfully",
+  "config": {
+    "headless": true,
+    "width": 1920,
+    "height": 1080,
+    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)...",
+    "locale": "en-US"
+  }
+}
+```
+
+### Error response
+
+```json
+{
+  "error": "Failed to create session",
+  "message": "Error details"
 }
 ```
 
 ---
 
-### List Sessions
-**GET** `/api/session/list`
+## 2) List Sessions
 
-Returns all active sessions.
+**GET** `/list`
 
-**Response:**
+Returns all active sessions from memory, including each session config and timestamps.
+
+### Success response
+
 ```json
 {
   "success": true,
+  "count": 1,
   "sessions": [
     {
-      "sessionId": "uuid-v4-session-id",
-      "createdAt": "2026-03-19T10:14:00.000Z",
-      "lastUsed": "2026-03-19T10:14:00.000Z",
-      "userAgent": "Mozilla/5.0...",
-      "headless": true
+      "sessionId": "550e8400-e29b-41d4-a716-446655440000",
+      "created": "2026-06-23T08:00:00.000Z",
+      "lastUsed": "2026-06-23T08:01:00.000Z",
+      "config": {
+        "headless": true,
+        "width": 1920,
+        "height": 1080,
+        "locale": "en-US"
+      }
     }
-  ],
-  "total": 1
+  ]
 }
 ```
 
 ---
 
-### Get Session Info
-**GET** `/api/session/:sessionId`
+## 3) Get Session
 
-Retrieves detailed information about a specific session.
+**GET** `/:sessionId`
 
-**Response:**
+Returns one session's metadata/config and updates `lastUsed`.
+
+### Success response
+
 ```json
 {
   "success": true,
-  "sessionId": "uuid-v4-session-id",
-  "sessionInfo": {
-    "createdAt": "2026-03-19T10:14:00.000Z",
-    "lastUsed": "2026-03-19T10:14:00.000Z",
-    "userAgent": "Mozilla/5.0...",
-    "viewport": {
-      "width": 1920,
-      "height": 1080
-    },
-    "currentUrl": "https://example.com",
-    "pageTitle": "Example Page"
+  "sessionId": "550e8400-e29b-41d4-a716-446655440000",
+  "created": "2026-06-23T08:00:00.000Z",
+  "lastUsed": "2026-06-23T08:02:00.000Z",
+  "config": {
+    "headless": true,
+    "width": 1920,
+    "height": 1080,
+    "locale": "en-US"
   }
 }
 ```
 
 ---
 
-### Close Session
-**DELETE** `/api/session/:sessionId`
+## 4) Close Session
 
-Closes a specific session and cleans up resources.
+**DELETE** `/:sessionId`
 
-**Response:**
+Closes the browser for that session and removes it from memory.
+
+### Success response
+
 ```json
 {
   "success": true,
-  "sessionId": "uuid-v4-session-id",
-  "message": "Session closed successfully"
+  "message": "Session 550e8400-e29b-41d4-a716-446655440000 closed successfully"
 }
 ```
 
 ---
 
-### Close All Sessions
-**DELETE** `/api/session/`
+## 5) Close All Sessions
 
-Closes all active sessions.
+**DELETE** `/`
 
-**Response:**
+Iterates over all session IDs, closes each browser, clears all sessions.
+
+### Success response
+
 ```json
 {
   "success": true,
-  "closedSessions": 3,
-  "message": "All sessions closed successfully"
+  "message": "Closed 3 session(s)",
+  "count": 3
 }
 ```
 
 ---
 
-## Navigation & Page Control
+## 6) Navigate
 
-### Navigate to URL
-**POST** `/api/session/:sessionId/goto`
+**POST** `/:sessionId/goto`
 
-Navigates the session to a specified URL.
+Navigates the session page to a URL. It validates URL/protocol, normalizes tabs to a single active tab, optionally opens a new tab, and applies geolocation permissions before/after navigation.
 
-**Request Body:**
+### Request body (example)
+
 ```json
 {
   "url": "https://example.com",
@@ -166,25 +196,43 @@ Navigates the session to a specified URL.
 }
 ```
 
-**Response:**
+### Success response
+
 ```json
 {
   "success": true,
-  "sessionId": "uuid-v4-session-id",
-  "url": "https://example.com",
-  "title": "Example Page",
-  "timestamp": "2026-03-19T10:14:00.000Z"
+  "sessionId": "550e8400-e29b-41d4-a716-446655440000",
+  "title": "Example Domain",
+  "url": "https://example.com/",
+  "tabCount": 1
+}
+```
+
+### Validation error examples
+
+```json
+{
+  "error": "URL is required"
+}
+```
+
+```json
+{
+  "error": "Invalid URL protocol",
+  "message": "Only HTTP, HTTPS, and file URLs are supported"
 }
 ```
 
 ---
 
-### Refresh Page
-**POST** `/api/session/:sessionId/refresh`
+## 7) Refresh Page
 
-Reloads the current page.
+**POST** `/:sessionId/refresh`
 
-**Request Body:**
+Reloads the current page and returns updated title/url metadata.
+
+### Request body (example)
+
 ```json
 {
   "waitUntil": "domcontentloaded",
@@ -192,618 +240,575 @@ Reloads the current page.
 }
 ```
 
-**Response:**
+### Success response
+
 ```json
 {
   "success": true,
-  "sessionId": "uuid-v4-session-id",
+  "sessionId": "550e8400-e29b-41d4-a716-446655440000",
   "message": "Page refreshed successfully",
   "pageInfo": {
-    "title": "Example Page",
-    "url": "https://example.com",
-    "timestamp": "2026-03-19T10:14:00.000Z"
+    "title": "Example Domain",
+    "url": "https://example.com/",
+    "timestamp": "2026-06-23T08:03:00.000Z"
   }
 }
 ```
 
----
+### Error example
 
-### Scroll to Bottom
-**POST** `/api/session/:sessionId/scroll-to-bottom`
-
-Scrolls the page to the bottom.
-
-**Response:**
 ```json
 {
-  "success": true,
-  "sessionId": "uuid-v4-session-id",
-  "message": "Scrolled to bottom successfully"
+  "error": "No active page found",
+  "message": "Session exists but no active page is available"
 }
 ```
 
 ---
 
-## Element Interaction
+## 8) Screenshot
 
-### Click Element
-**POST** `/api/session/:sessionId/click`
+**POST** `/:sessionId/screenshot`
 
-Clicks on an element using CSS selector.
+Waits briefly for dynamic content and returns a PNG screenshot binary.
 
-**Request Body:**
-```json
-{
-  "selector": "button.submit",
-  "waitForNavigation": true,
-  "timeout": 30000,
-  "waitUntil": "domcontentloaded"
-}
-```
+### Request body (example)
 
-**Response:**
-```json
-{
-  "success": true,
-  "sessionId": "uuid-v4-session-id",
-  "message": "Element clicked successfully",
-  "navigation": {
-    "triggered": true,
-    "newUrl": "https://example.com/success"
-  }
-}
-```
-
----
-
-### Type Text
-**POST** `/api/session/:sessionId/type`
-
-Types text into an element.
-
-**Request Body:**
-```json
-{
-  "selector": "input[name='username']",
-  "text": "john.doe",
-  "delay": 120
-}
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "sessionId": "uuid-v4-session-id",
-  "message": "Text typed successfully",
-  "element": "input[name='username']",
-  "textLength": 8
-}
-```
-
----
-
-### Fill Input
-**POST** `/api/session/:sessionId/fill`
-
-Fills an input field with text (advanced version of type).
-
-**Request Body:**
-```json
-{
-  "selector": "input[name='email']",
-  "text": "user@example.com",
-  "pressEnter": false,
-  "clearInput": true
-}
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "sessionId": "uuid-v4-session-id",
-  "message": "Input filled successfully",
-  "element": "input[name='email']",
-  "textEntered": "user@example.com"
-}
-```
-
----
-
-### Check XPath
-**POST** `/api/session/:sessionId/check-xpath`
-
-Checks if elements matching XPath exist on the page.
-
-**Request Body:**
-```json
-{
-  "xpath": "//button[contains(text(), 'Submit')]"
-}
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "sessionId": "uuid-v4-session-id",
-  "xpath": "//button[contains(text(), 'Submit')]",
-  "found": true,
-  "count": 1,
-  "elements": [
-    {
-      "text": "Submit",
-      "tagName": "BUTTON",
-      "className": "submit-btn"
-    }
-  ]
-}
-```
-
----
-
-## Content & Data Retrieval
-
-### Take Screenshot
-**POST** `/api/session/:sessionId/screenshot`
-
-Takes a screenshot of the current page.
-
-**Request Body:**
 ```json
 {
   "fullPage": true
 }
 ```
 
-**Response:**
-- **Content-Type:** `image/png`
-- **Body:** Binary image data
+### Success response
 
----
+- Content-Type: `image/png`
+- Body: binary image data
 
-### Execute JavaScript
-**POST** `/api/session/:sessionId/execute`
+### Error response
 
-Executes JavaScript code in the page context.
-
-**Request Body:**
 ```json
 {
-  "script": "document.title + ' - ' + window.location.href"
-}
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "sessionId": "uuid-v4-session-id",
-  "result": "Example Page - https://example.com",
-  "executionTime": 15
+  "error": "Failed to take screenshot",
+  "message": "Error details"
 }
 ```
 
 ---
 
-### Get Page HTML
-**GET** `/api/session/:sessionId/html`
+## 9) Execute Script
 
-Returns the full HTML content of the page.
+**POST** `/:sessionId/execute`
 
-**Query Parameters:**
-- `waitFor` (optional): Wait condition (`networkidle0`, `domcontentloaded`)
-- `timeout` (optional): Timeout in milliseconds
+Runs JavaScript in the page context using `page.evaluate(script)`.
 
-**Response:**
-- **Content-Type:** `text/html`
-- **Body:** Full HTML content
+### Request body (example)
 
----
-
-### Get Element Content
-**POST** `/api/session/:sessionId/content`
-
-Retrieves content from specific elements.
-
-**Request Body:**
 ```json
 {
-  "selector": ".content-area"
+  "script": "() => document.title"
 }
 ```
 
-**Response:**
+### Success response
+
 ```json
 {
   "success": true,
-  "sessionId": "uuid-v4-session-id",
-  "content": {
-    "text": "Element text content",
-    "html": "<div class=\"content-area\">Element text content</div>",
-    "attributes": {
-      "class": "content-area",
-      "id": "main-content"
-    }
-  }
+  "sessionId": "550e8400-e29b-41d4-a716-446655440000",
+  "result": "Example Domain"
+}
+```
+
+### Validation error
+
+```json
+{
+  "error": "Script is required"
 }
 ```
 
 ---
 
-## reCAPTCHA & Anti-Bot
+## 10) Click Element
 
-### Solve reCAPTCHA
-**POST** `/api/session/:sessionId/solve-recaptcha`
+**POST** `/:sessionId/click`
 
-Automatically solves reCAPTCHA challenges using 2Captcha API with advanced anti-detection.
+Finds a clickable element, scrolls into view, performs human-like interaction, optionally waits for navigation/new tab behavior, then returns final URL/title.
 
-**Request Body:**
+### Request body (example)
+
 ```json
 {
-  "submitAfter": false,
-  "waitTime": 5000
+  "selector": "button[type='submit']",
+  "waitForNavigation": true,
+  "allowNewTab": false,
+  "navigationTimeout": 10000
 }
 ```
 
-**Response:**
+### Success response
+
 ```json
 {
   "success": true,
-  "sessionId": "uuid-v4-session-id",
-  "tokenPreview": "03AHJ_Vuv... (first 30 chars)",
-  "submitted": false,
-  "submitResult": null,
-  "captcha": {
-    "siteKey": "6Lc...",
-    "isEnterprise": true,
-    "s": "optional-data-s",
-    "action": null
-  },
-  "injectionResult": {
-    "success": true,
-    "methods": ["set:g-recaptcha-response", "invoke:grecaptcha-callbacks"],
-    "responsePresent": true
-  }
+  "sessionId": "550e8400-e29b-41d4-a716-446655440000",
+  "clicked": true,
+  "navigated": true,
+  "url": "https://example.com/next",
+  "title": "Next Page"
 }
 ```
 
-**Features:**
-- ✅ Advanced browser fingerprinting
-- ✅ Enterprise and `data-s` aware 2Captcha submission
-- ✅ Direct token injection into response fields and callbacks
-- ✅ Proxy support
-- ✅ Callback and widget response handling
+### Not-clickable example
+
+```json
+{
+  "error": "No clickable element found",
+  "message": "Could not find a clickable element matching selector: button[type='submit']"
+}
+```
 
 ---
 
-### Configure 2Captcha (Deprecated)
-**POST** `/api/session/:sessionId/configure-2captcha`
+## 11) Check XPath
 
-> **Note:** This endpoint is deprecated. The solve-recaptcha endpoint now uses direct API calls.
+**POST** `/:sessionId/check-xpath`
+
+Evaluates whether the XPath resolves to at least one node.
+
+### Request body (example)
+
+```json
+{
+  "xpath": "//button[contains(., 'Submit')]"
+}
+```
+
+### Success response
+
+```json
+{
+  "exists": true,
+  "xpath": "//button[contains(., 'Submit')]",
+  "sessionId": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+
+### Validation error
+
+```json
+{
+  "error": "XPath is required"
+}
+```
 
 ---
 
-### Validate 2Captcha (Deprecated)
-**GET** `/api/session/:sessionId/validate-2captcha`
+## 12) Type Text
 
-> **Note:** This endpoint is deprecated.
+**POST** `/:sessionId/type`
+
+Waits for selector, focuses it, types text with configurable delay.
+
+### Request body (example)
+
+```json
+{
+  "selector": "input[name='email']",
+  "text": "user@example.com",
+  "delay": 120
+}
+```
+
+### Success response
+
+```json
+{
+  "success": true,
+  "sessionId": "550e8400-e29b-41d4-a716-446655440000",
+  "typed": true
+}
+```
+
+### Validation error
+
+```json
+{
+  "error": "Selector and text are required"
+}
+```
 
 ---
 
-### Diagnose 2Captcha (Deprecated)
-**GET** `/api/session/:sessionId/diagnose-2captcha`
+## 13) Fill Input (Human-like)
 
-> **Note:** This endpoint is deprecated.
+**POST** `/:sessionId/fill`
+
+Uses a more human-like typing flow (scroll into view, optional clear, random typing delay, optional Enter key).
+
+### Request body (example)
+
+```json
+{
+  "selector": "input[name='q']",
+  "text": "browser automation",
+  "pressEnter": false,
+  "clearInput": true
+}
+```
+
+### Success response
+
+```json
+{
+  "success": true,
+  "message": "Text filled successfully",
+  "selector": "input[name='q']",
+  "textLength": 18,
+  "pressEnterPerformed": false
+}
+```
+
+### Validation error
+
+```json
+{
+  "error": "Missing required parameters",
+  "message": "Both selector and text are required"
+}
+```
 
 ---
 
-## Advanced Features
+## 14) Get Content
 
-### Simulate User Actions
-**POST** `/api/session/:sessionId/simulate-actions`
+**POST** `/:sessionId/content`
 
-Simulates realistic user behavior for extended periods.
+Returns full page HTML when no selector is passed, or selector text content when selector is provided.
 
-**Request Body:**
+### Request body examples
+
+```json
+{
+  "selector": "h1"
+}
+```
+
+```json
+{}
+```
+
+### Success response
+
+```json
+{
+  "success": true,
+  "sessionId": "550e8400-e29b-41d4-a716-446655440000",
+  "title": "Example Domain",
+  "content": "Example Domain"
+}
+```
+
+---
+
+## 15) Get Rendered HTML
+
+**GET** `/:sessionId/html`
+
+Waits for network idle, does a short scroll pass to trigger lazy loads, then returns rendered HTML (`document.documentElement.outerHTML`).
+
+### Query parameters
+
+- `waitFor` (accepted by API but current implementation always uses network-idle wait internally)
+- `timeout` (default `30000`)
+
+### Example request
+
+`GET /api/session/<sessionId>/html?timeout=45000`
+
+### Success response
+
+- Content-Type: `text/html`
+- Body: rendered HTML
+
+### Error response
+
+```json
+{
+  "error": "Failed to get page HTML",
+  "message": "Error details"
+}
+```
+
+---
+
+## 16) Simulate User Actions
+
+**POST** `/:sessionId/simulate-actions`
+
+Starts asynchronous background simulation (scrolling, mouse movement, typing, idle/navigation patterns) for the requested duration, then returns immediately.
+
+### Request body (example)
+
 ```json
 {
   "durationMinutes": 5
 }
 ```
 
-**Response:**
+### Success response
+
 ```json
 {
   "success": true,
-  "sessionId": "uuid-v4-session-id",
-  "simulation": {
-    "duration": 300,
-    "actions": [
-      "scroll",
-      "click",
-      "type",
-      "navigate"
-    ],
-    "pagesVisited": 3,
-    "interactions": 15
-  }
+  "message": "User simulation started for 5 minutes",
+  "actions": "Enhanced human-like behavior with natural mouse movements, typing, and browsing patterns"
+}
+```
+
+### Error examples
+
+```json
+{
+  "error": "Session not found"
+}
+```
+
+```json
+{
+  "error": "Browser or page not available"
 }
 ```
 
 ---
 
-### Validate Google
-**POST** `/api/session/:sessionId/validate-google`
+## 17) Validate Google
 
-Validates Google login page status and challenges.
+**POST** `/:sessionId/validate-google`
 
-**Response:**
+Navigates to Google, waits for load, attempts to accept cookie banner, and tries to switch language to English.
+
+### Request body
+
+No request body required.
+
+### Response behavior (important)
+
+- On error, returns:
+
+```json
+{
+  "error": "Failed to validate Google",
+  "message": "Error details"
+}
+```
+
+- On success, current controller implementation performs actions but does **not** explicitly send a success JSON response body.
+
+---
+
+## 18) Solve reCAPTCHA
+
+**POST** `/:sessionId/solve-recaptcha`
+
+Extracts reCAPTCHA metadata from the active page, requests solution from 2Captcha, injects token into the page, optionally clicks a submit button.
+
+### Request body (example)
+
+```json
+{
+  "submitAfter": true,
+  "waitTime": 5000
+}
+```
+
+### Success response
+
 ```json
 {
   "success": true,
-  "sessionId": "uuid-v4-session-id",
+  "sessionId": "550e8400-e29b-41d4-a716-446655440000",
+  "tokenPreview": "03AFcWeA...<first 30 chars>...",
+  "submitted": true,
+  "submitResult": {
+    "success": true,
+    "text": "Continue"
+  },
+  "captcha": {
+    "siteKey": "6Lc...",
+    "isEnterprise": true,
+    "s": null,
+    "action": null
+  },
+  "injectionResult": {
+    "success": true
+  }
+}
+```
+
+### No-captcha example
+
+```json
+{
+  "success": false,
+  "message": "No reCAPTCHA detected",
+  "details": {}
+}
+```
+
+---
+
+## 19) Configure 2Captcha
+
+**POST** `/:sessionId/configure-2captcha`
+
+Configures 2Captcha extension settings for the session page (API key, proxy, proxy type).
+
+### Request body (example)
+
+```json
+{
+  "apiKey": "YOUR_2CAPTCHA_API_KEY",
+  "proxy": "http://proxy.example.com:8080",
+  "useProxy": true,
+  "proxyType": "HTTP"
+}
+```
+
+### Success response
+
+```json
+{
+  "success": true,
+  "message": "2Captcha configured successfully",
+  "configuration": {
+    "configured": true,
+    "apiKeySet": true,
+    "proxyEnabled": true,
+    "proxySet": true,
+    "extensionEnabled": true
+  }
+}
+```
+
+### Error response
+
+```json
+{
+  "error": "Failed to configure 2Captcha",
+  "message": "Extension may not be loaded or configuration failed"
+}
+```
+
+---
+
+## 20) Validate 2Captcha Config
+
+**GET** `/:sessionId/validate-2captcha`
+
+Reads extension config state and returns whether required values are present.
+
+### Success response
+
+```json
+{
+  "success": true,
+  "sessionId": "550e8400-e29b-41d4-a716-446655440000",
   "validation": {
-    "isGooglePage": true,
-    "hasRecaptcha": true,
-    "recaptchaType": "enterprise",
-    "challenges": ["recaptcha"],
-    "ready": true
+    "configured": true,
+    "apiKeySet": true,
+    "proxyEnabled": false,
+    "proxySet": false,
+    "extensionEnabled": true
   }
 }
 ```
 
 ---
 
-## Error Handling
+## 21) Diagnose 2Captcha
 
-All endpoints return consistent error responses:
+**GET** `/:sessionId/diagnose-2captcha`
+
+Runs deeper diagnostics against extension availability/config and returns health summary + recommendations.
+
+### Success response
 
 ```json
 {
-  "error": "Session not found",
-  "message": "Session uuid-v4-session-id does not exist or has expired",
-  "code": "SESSION_NOT_FOUND"
+  "success": true,
+  "sessionId": "550e8400-e29b-41d4-a716-446655440000",
+  "diagnostics": {
+    "extensionLoaded": true,
+    "configAccessible": true,
+    "apiKeySet": true,
+    "proxyEnabled": false,
+    "errors": []
+  },
+  "summary": {
+    "healthy": true,
+    "issues": [],
+    "recommendations": []
+  }
 }
 ```
 
-### Common Error Codes:
-
-| Code | Description |
-|------|-------------|
-| `SESSION_NOT_FOUND` | Session ID doesn't exist or expired |
-| `INVALID_URL` | Provided URL is malformed |
-| `ELEMENT_NOT_FOUND` | CSS/XPath selector not found |
-| `TIMEOUT` | Operation timed out |
-| `NAVIGATION_FAILED` | Page navigation failed |
-| `CAPTCHA_FAILED` | reCAPTCHA solving failed |
-| `PROXY_ERROR` | Proxy connection failed |
-| `SCRIPT_ERROR` | JavaScript execution failed |
-
-### HTTP Status Codes:
-
-- `200` - Success
-- `400` - Bad Request (invalid parameters)
-- `404` - Not Found (session doesn't exist)
-- `500` - Internal Server Error
-- `503` - Service Unavailable (browser issues)
-
 ---
 
-## Environment Variables
+## 22) Scroll To Bottom
 
-Required for reCAPTCHA solving:
+**POST** `/:sessionId/scroll-to-bottom`
 
-```bash
-TWO_CAPTCHA_API_KEY=your_2captcha_api_key
+Scrolls to the calculated page bottom, waits until viewport reaches bottom threshold, then returns position details.
+
+### Request body
+
+No request body required.
+
+### Success response
+
+```json
+{
+  "success": true,
+  "message": "Page scrolled to bottom",
+  "position": {
+    "scrollY": 4100,
+    "innerHeight": 947,
+    "scrollHeight": 5032
+  }
+}
 ```
 
-Optional defaults:
+### Error response
 
-```bash
-DEFAULT_HEADLESS=true
-DEFAULT_SLOWMO=0
+```json
+{
+  "error": "Failed to scroll to bottom",
+  "details": "Error details"
+}
 ```
 
 ---
 
-## Rate Limits & Usage
-
-- **Session Timeout:** 60 minutes of inactivity
-- **Cleanup:** Automatic cleanup every 1 minute
-- **Concurrent Sessions:** No hard limit (resource dependent)
-- **reCAPTCHA Limits:** Depends on 2Captcha plan
-
----
-
-## Examples
-
-### Basic Session Workflow
+## Quick cURL workflow
 
 ```bash
-# 1. Create session
+# 1) Create session
 curl -X POST http://localhost:3000/api/session/create \
   -H "Content-Type: application/json" \
-  -d '{"headless": false, "viewport": {"width": 1920, "height": 1080}}'
+  -d '{"headless": true, "width": 1920, "height": 1080}'
 
-# 2. Navigate to page
-curl -X POST http://localhost:3000/api/session/{sessionId}/goto \
+# 2) Navigate
+curl -X POST http://localhost:3000/api/session/<sessionId>/goto \
   -H "Content-Type: application/json" \
-  -d '{"url": "https://example.com"}'
+  -d '{"url":"https://example.com"}'
 
-# 3. Take screenshot
-curl -X POST http://localhost:3000/api/session/{sessionId}/screenshot \
+# 3) Extract title with execute
+curl -X POST http://localhost:3000/api/session/<sessionId>/execute \
   -H "Content-Type: application/json" \
-  -d '{"fullPage": true}' \
-  --output screenshot.png
+  -d '{"script":"() => document.title"}'
 
-# 4. Solve reCAPTCHA
-curl -X POST http://localhost:3000/api/session/{sessionId}/solve-recaptcha \
-  -H "Content-Type: application/json" \
-  -d '{"submitAfter": true}'
-
-# 5. Close session
-curl -X DELETE http://localhost:3000/api/session/{sessionId}
+# 4) Close session
+curl -X DELETE http://localhost:3000/api/session/<sessionId>
 ```
-
-### Advanced reCAPTCHA Solving
-
-```bash
-curl -X POST http://localhost:3000/api/session/{sessionId}/solve-recaptcha \
-  -H "Content-Type: application/json" \
-  -d '{
-    "submitAfter": true,
-    "waitTime": 8000
-  }'
-```
-
-This will:
-1. Detect reCAPTCHA on the page
-2. Send to 2Captcha with browser fingerprinting
-3. Simulate local solving (25-40 seconds)
-4. Add random scrolls and mouse movements
-5. Click at 100x100 position
-6. Inject token with realistic typing
-7. Submit form automatically
-
----
-
-## SDK Examples
-
-### Node.js
-
-```javascript
-const axios = require('axios');
-
-class BrowserAPI {
-  constructor(baseURL = 'http://localhost:3000/api/session') {
-    this.baseURL = baseURL;
-  }
-
-  async createSession(options = {}) {
-    const response = await axios.post(`${this.baseURL}/create`, options);
-    return response.data;
-  }
-
-  async navigate(sessionId, url) {
-    const response = await axios.post(`${this.baseURL}/${sessionId}/goto`, { url });
-    return response.data;
-  }
-
-  async solveRecaptcha(sessionId, options = {}) {
-    const response = await axios.post(`${this.baseURL}/${sessionId}/solve-recaptcha`, options);
-    return response.data;
-  }
-
-  async closeSession(sessionId) {
-    const response = await axios.delete(`${this.baseURL}/${sessionId}`);
-    return response.data;
-  }
-}
-
-// Usage
-const api = new BrowserAPI();
-
-async function example() {
-  const session = await api.createSession({
-    headless: true,
-    viewport: { width: 1920, height: 1080 }
-  });
-
-  await api.navigate(session.sessionId, 'https://accounts.google.com');
-  
-  const result = await api.solveRecaptcha(session.sessionId, {
-    submitAfter: true
-  });
-
-  console.log('reCAPTCHA solved:', result.success);
-  
-  await api.closeSession(session.sessionId);
-}
-```
-
-### Python
-
-```python
-import requests
-import json
-
-class BrowserAPI:
-    def __init__(self, base_url='http://localhost:3000/api/session'):
-        self.base_url = base_url
-
-    def create_session(self, options=None):
-        response = requests.post(f'{self.base_url}/create', json=options or {})
-        return response.json()
-
-    def navigate(self, session_id, url):
-        response = requests.post(f'{self.base_url}/{session_id}/goto', 
-                               json={'url': url})
-        return response.json()
-
-    def solve_recaptcha(self, session_id, options=None):
-        response = requests.post(f'{self.base_url}/{session_id}/solve-recaptcha',
-                               json=options or {})
-        return response.json()
-
-    def close_session(self, session_id):
-        response = requests.delete(f'{self.base_url}/{session_id}')
-        return response.json()
-
-# Usage
-api = BrowserAPI()
-
-session = api.create_session({
-    'headless': True,
-    'viewport': {'width': 1920, 'height': 1080}
-})
-
-api.navigate(session['sessionId'], 'https://accounts.google.com')
-
-result = api.solve_recaptcha(session['sessionId'], {
-    'submitAfter': True
-})
-
-print(f"reCAPTCHA solved: {result['success']}")
-
-api.close_session(session['sessionId'])
-```
-
----
-
-## Support & Troubleshooting
-
-### Common Issues
-
-1. **Session Not Found**
-   - Check if session ID is correct
-   - Verify session hasn't expired (60 min timeout)
-
-2. **reCAPTCHA Solving Fails**
-   - Verify `TWO_CAPTCHA_API_KEY` environment variable
-   - Check 2Captcha account balance
-   - Ensure proxy settings are correct
-
-3. **Navigation Timeout**
-   - Increase timeout value
-   - Check network connectivity
-   - Verify URL is accessible
-
-4. **Element Not Found**
-   - Verify CSS selector is correct
-   - Wait for page to load completely
-   - Check if element is in iframe
-
-### Debug Mode
-
-Set environment variable for debugging:
-```bash
-DEBUG=browser-api
-```
-
-This will enable detailed logging for all operations.
-
----
-
-*Last updated: March 19, 2026*
