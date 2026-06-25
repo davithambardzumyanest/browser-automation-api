@@ -24,7 +24,6 @@ const BROWSER_ARGS = [
     '--disable-gpu',
     '--disable-blink-features=AutomationControlled',
     '--disable-features=IsolateOrigins,site-per-process',
-    '--disable-web-security',
     '--disable-infobars',
     '--window-size=1920,1080',
     '--start-maximized',
@@ -67,17 +66,382 @@ const BROWSER_ARGS = [
     '--disable-blink-features=AutomationControlled',
 ];
 
-// Common user agents for rotation
+// Common Chrome user agents (version must match Client Hints below)
 const USER_AGENTS = [
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/118.0',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:109.0) Gecko/20100101 Firefox/118.0'
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36'
 ];
 
 // Function to get a random user agent
 const getRandomUserAgent = () => {
     return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+};
+
+const detectPlatformFromUA = (ua = '') => {
+    const input = String(ua);
+    if (input.includes('Windows')) {
+        return {
+            secChUaPlatform: '"Windows"',
+            secChUaPlatformVersion: '"15.0.0"',
+            navigatorPlatform: 'Win32',
+            osCpu: 'Windows NT 10.0; Win64; x64'
+        };
+    }
+    if (input.includes('Macintosh') || input.includes('Mac OS X')) {
+        return {
+            secChUaPlatform: '"macOS"',
+            secChUaPlatformVersion: '"14.0.0"',
+            navigatorPlatform: 'MacIntel',
+            osCpu: 'Intel Mac OS X 10_15_7'
+        };
+    }
+    if (input.includes('Linux')) {
+        return {
+            secChUaPlatform: '"Linux"',
+            secChUaPlatformVersion: '"6.0.0"',
+            navigatorPlatform: 'Linux x86_64',
+            osCpu: 'Linux x86_64'
+        };
+    }
+    return {
+        secChUaPlatform: '"Windows"',
+        secChUaPlatformVersion: '"15.0.0"',
+        navigatorPlatform: 'Win32',
+        osCpu: 'Windows NT 10.0; Win64; x64'
+    };
+};
+
+const isChromeUserAgent = (ua = '') => /Chrome\//.test(ua) && !/Edg\//.test(ua) && !/OPR\//.test(ua);
+
+const parseChromeVersionFromUA = (ua = '') => {
+    const fullMatch = String(ua).match(/Chrome\/(\d+)\.(\d+)\.(\d+)\.(\d+)/);
+    if (fullMatch) {
+        return {
+            major: fullMatch[1],
+            full: `${fullMatch[1]}.${fullMatch[2]}.${fullMatch[3]}.${fullMatch[4]}`
+        };
+    }
+    const majorMatch = String(ua).match(/Chrome\/(\d+)/);
+    if (majorMatch) {
+        return { major: majorMatch[1], full: `${majorMatch[1]}.0.0.0` };
+    }
+    return { major: '145', full: '145.0.0.0' };
+};
+
+const buildChromeClientHints = (userAgent, platformProfile) => {
+    const { major, full } = parseChromeVersionFromUA(userAgent);
+    const platformName = platformProfile.secChUaPlatform.replace(/"/g, '');
+    const platformVersion = platformProfile.secChUaPlatformVersion.replace(/"/g, '');
+
+    const brands = [
+        { brand: 'Not:A-Brand', version: '99' },
+        { brand: 'Google Chrome', version: major },
+        { brand: 'Chromium', version: major }
+    ];
+
+    const fullVersionList = [
+        { brand: 'Not:A-Brand', version: '99.0.0.0' },
+        { brand: 'Google Chrome', version: full },
+        { brand: 'Chromium', version: full }
+    ];
+
+    return {
+        major,
+        full,
+        brands,
+        fullVersionList,
+        secChUa: brands.map((b) => `"${b.brand}";v="${b.version}"`).join(', '),
+        secChUaFullVersionList: fullVersionList.map((b) => `"${b.brand}";v="${b.version}"`).join(', '),
+        userAgentMetadata: {
+            brands,
+            fullVersion: full,
+            platform: platformName,
+            platformVersion,
+            architecture: 'x86',
+            model: '',
+            mobile: false,
+            bitness: '64'
+        }
+    };
+};
+
+const applyChromeIdentity = async (page, userAgent, platformProfile) => {
+    if (!isChromeUserAgent(userAgent)) {
+        await page.setUserAgent(userAgent);
+        return null;
+    }
+
+    const chromeHints = buildChromeClientHints(userAgent, platformProfile);
+    await page.setUserAgent(userAgent, chromeHints.userAgentMetadata);
+    return chromeHints;
+};
+
+const buildConsistentHeaders = ({ locale, userAgent, customHeaders = {}, chromeHints = null }) => {
+    const languageCode = String(locale || 'en-US').split('-')[0];
+    const platform = detectPlatformFromUA(userAgent);
+    const hints = chromeHints || (isChromeUserAgent(userAgent)
+        ? buildChromeClientHints(userAgent, platform)
+        : null);
+
+    const defaultHeaders = {
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+        'Accept-Language': `${locale},${languageCode};q=0.9,en;q=0.8`,
+        'Accept-Encoding': 'gzip, deflate, br',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Sec-Fetch-User': '?1',
+        'Cache-Control': 'max-age=0',
+        'Pragma': 'no-cache',
+        'Sec-CH-UA-Mobile': '?0',
+        'Sec-CH-UA-Platform': platform.secChUaPlatform,
+        'Sec-CH-UA-Platform-Version': platform.secChUaPlatformVersion
+    };
+
+    if (hints) {
+        defaultHeaders['Sec-CH-UA'] = hints.secChUa;
+        defaultHeaders['Sec-CH-UA-Full-Version-List'] = hints.secChUaFullVersionList;
+    }
+
+    return { ...defaultHeaders, ...customHeaders };
+};
+
+const LOCALE_TIMEZONE_DEFAULTS = {
+    'en-US': 'America/New_York',
+    'en-CA': 'America/Toronto',
+    'en-GB': 'Europe/London',
+    'fr-CA': 'America/Toronto',
+    'fr-FR': 'Europe/Paris',
+    'de-DE': 'Europe/Berlin',
+    'es-ES': 'Europe/Madrid',
+    'it-IT': 'Europe/Rome',
+    'pt-BR': 'America/Sao_Paulo',
+    'ja-JP': 'Asia/Tokyo',
+    'ko-KR': 'Asia/Seoul',
+    'zh-CN': 'Asia/Shanghai'
+};
+
+const resolveSessionTimezone = (locale, timezone, geolocation) => {
+    if (timezone) return timezone;
+    if (geolocation?.timezone) return geolocation.timezone;
+    return LOCALE_TIMEZONE_DEFAULTS[locale] || Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/New_York';
+};
+
+const buildBrowserProfile = ({
+    locale,
+    timezone,
+    userAgent,
+    platformProfile,
+    chromeHints,
+    width,
+    height,
+    deviceScaleFactor = 1,
+    geolocation
+}) => {
+    const languageCode = String(locale || 'en-US').split('-')[0];
+    const resolvedTimezone = resolveSessionTimezone(locale, timezone, geolocation);
+    const viewportWidth = width || 1920;
+    const viewportHeight = height || 1080;
+    const chromeUiHeight = 88;
+
+    return {
+        locale,
+        languageCode,
+        timezone: resolvedTimezone,
+        userAgent,
+        platformProfile,
+        chromeProfile: chromeHints,
+        viewport: {
+            width: viewportWidth,
+            height: viewportHeight,
+            deviceScaleFactor
+        },
+        screen: {
+            width: viewportWidth,
+            height: viewportHeight,
+            availWidth: viewportWidth,
+            availHeight: Math.max(viewportHeight - 40, viewportHeight),
+            colorDepth: 24,
+            pixelDepth: 24,
+            devicePixelRatio: deviceScaleFactor
+        },
+        window: {
+            outerWidth: viewportWidth,
+            outerHeight: viewportHeight + chromeUiHeight,
+            innerWidth: viewportWidth,
+            innerHeight: viewportHeight
+        },
+        webgl: {
+            vendor: 'Google Inc. (Intel)',
+            renderer: 'ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)'
+        },
+        hardware: {
+            hardwareConcurrency: 8,
+            deviceMemory: 8,
+            maxTouchPoints: 0
+        },
+        permissions: {
+            geolocation: geolocation ? 'granted' : 'prompt',
+            notifications: 'default',
+            camera: 'prompt',
+            microphone: 'prompt',
+            'clipboard-read': 'prompt',
+            'clipboard-write': 'granted'
+        },
+        hasGeolocation: Boolean(
+            geolocation &&
+            typeof geolocation.latitude === 'number' &&
+            typeof geolocation.longitude === 'number'
+        )
+    };
+};
+
+const registerBrowserRealism = async (page, profile) => {
+    await page.evaluateOnNewDocument((browserProfile) => {
+        const {
+            locale,
+            languageCode,
+            timezone,
+            platformProfile,
+            chromeProfile,
+            screen: screenMetrics,
+            window: windowMetrics,
+            webgl,
+            hardware,
+            permissions
+        } = browserProfile;
+
+        const defineGetter = (obj, prop, getter) => {
+            try {
+                Object.defineProperty(obj, prop, { get: getter, configurable: true });
+            } catch (_) {}
+        };
+
+        defineGetter(navigator, 'webdriver', () => false);
+        defineGetter(navigator, 'language', () => locale);
+        defineGetter(navigator, 'languages', () => [locale, languageCode, 'en-US', 'en']);
+        defineGetter(navigator, 'platform', () => platformProfile.navigatorPlatform);
+        defineGetter(navigator, 'vendor', () => 'Google Inc.');
+        defineGetter(navigator, 'productSub', () => '20030107');
+        defineGetter(navigator, 'cookieEnabled', () => true);
+        defineGetter(navigator, 'pdfViewerEnabled', () => true);
+        defineGetter(navigator, 'doNotTrack', () => null);
+        defineGetter(navigator, 'hardwareConcurrency', () => hardware.hardwareConcurrency);
+        defineGetter(navigator, 'deviceMemory', () => hardware.deviceMemory);
+        defineGetter(navigator, 'maxTouchPoints', () => hardware.maxTouchPoints);
+
+        if ('oscpu' in navigator) {
+            defineGetter(navigator, 'oscpu', () => platformProfile.osCpu);
+        }
+
+        if ('userAgentData' in navigator && chromeProfile) {
+            defineGetter(navigator, 'userAgentData', () => ({
+                brands: chromeProfile.brands,
+                mobile: false,
+                platform: platformProfile.secChUaPlatform.replace(/"/g, ''),
+                getHighEntropyValues: async () => ({
+                    architecture: 'x86',
+                    bitness: '64',
+                    mobile: false,
+                    model: '',
+                    platform: platformProfile.secChUaPlatform.replace(/"/g, ''),
+                    platformVersion: platformProfile.secChUaPlatformVersion.replace(/"/g, ''),
+                    uaFullVersion: chromeProfile.full,
+                    fullVersionList: chromeProfile.fullVersionList
+                })
+            }));
+        }
+
+        defineGetter(navigator, 'connection', () => ({
+            downlink: 10,
+            effectiveType: '4g',
+            rtt: 50,
+            saveData: false,
+            type: 'wifi'
+        }));
+
+        defineGetter(screen, 'width', () => screenMetrics.width);
+        defineGetter(screen, 'height', () => screenMetrics.height);
+        defineGetter(screen, 'availWidth', () => screenMetrics.availWidth);
+        defineGetter(screen, 'availHeight', () => screenMetrics.availHeight);
+        defineGetter(screen, 'colorDepth', () => screenMetrics.colorDepth);
+        defineGetter(screen, 'pixelDepth', () => screenMetrics.pixelDepth);
+        defineGetter(window, 'devicePixelRatio', () => screenMetrics.devicePixelRatio);
+        defineGetter(window, 'outerWidth', () => windowMetrics.outerWidth);
+        defineGetter(window, 'outerHeight', () => windowMetrics.outerHeight);
+        defineGetter(window, 'innerWidth', () => windowMetrics.innerWidth);
+        defineGetter(window, 'innerHeight', () => windowMetrics.innerHeight);
+
+        const patchWebGL = (Context) => {
+            if (!Context || !Context.prototype) return;
+            const originalGetParameter = Context.prototype.getParameter;
+            Context.prototype.getParameter = function getParameter(parameter) {
+                if (parameter === 37445) return webgl.vendor;
+                if (parameter === 37446) return webgl.renderer;
+                return originalGetParameter.call(this, parameter);
+            };
+        };
+        patchWebGL(window.WebGLRenderingContext);
+        patchWebGL(window.WebGL2RenderingContext);
+
+        const originalPermissionsQuery = navigator.permissions?.query?.bind(navigator.permissions);
+        if (originalPermissionsQuery) {
+            navigator.permissions.query = (parameters) => {
+                const name = parameters?.name;
+                if (name && Object.prototype.hasOwnProperty.call(permissions, name)) {
+                    return Promise.resolve({ state: permissions[name], onchange: null });
+                }
+                return originalPermissionsQuery(parameters);
+            };
+        }
+
+        if (typeof Notification !== 'undefined' && Notification.requestPermission) {
+            Notification.requestPermission = () => Promise.resolve(permissions.notifications);
+        }
+
+        window.chrome = window.chrome || {};
+        window.chrome.runtime = window.chrome.runtime || {};
+        window.chrome.app = window.chrome.app || { isInstalled: false };
+
+        const OriginalDateTimeFormat = Intl.DateTimeFormat;
+        Intl.DateTimeFormat = function DateTimeFormat(locales, options) {
+            const opts = options ? { ...options } : {};
+            if (!opts.timeZone) opts.timeZone = timezone;
+            return new OriginalDateTimeFormat(locales, opts);
+        };
+        Intl.DateTimeFormat.prototype = OriginalDateTimeFormat.prototype;
+        Intl.DateTimeFormat.supportedLocalesOf = OriginalDateTimeFormat.supportedLocalesOf;
+
+        const originalResolvedOptions = OriginalDateTimeFormat.prototype.resolvedOptions;
+        OriginalDateTimeFormat.prototype.resolvedOptions = function resolvedOptions() {
+            const result = originalResolvedOptions.call(this);
+            return { ...result, timeZone: timezone };
+        };
+    }, profile);
+};
+
+const setupPageRealism = async (page, browserProfile, requestHeaders) => {
+    await applyChromeIdentity(page, browserProfile.userAgent, browserProfile.platformProfile);
+    await page.setViewport({
+        width: browserProfile.viewport.width,
+        height: browserProfile.viewport.height,
+        deviceScaleFactor: browserProfile.viewport.deviceScaleFactor,
+        isMobile: false,
+        hasTouch: false,
+        isLandscape: browserProfile.viewport.width > browserProfile.viewport.height
+    });
+
+    try {
+        await page.emulateTimezone(browserProfile.timezone);
+    } catch (tzError) {
+        console.warn(`Failed to set timezone "${browserProfile.timezone}":`, tzError.message);
+    }
+
+    await page.setExtraHTTPHeaders(requestHeaders);
+    await registerBrowserRealism(page, browserProfile);
 };
 
 // Helper function to wait
@@ -1646,25 +2010,34 @@ const createSession = async (req, res) => {
         geolocationOrigins,
         grantGeolocationOnNavigation = true,
         timezone,
+        deviceScaleFactor = 1,
+        persistSession = false,
     } = req.body || {};
+    const finalUserAgent = userAgent || getRandomUserAgent();
+    const platformProfile = detectPlatformFromUA(finalUserAgent);
+    const chromeHints = isChromeUserAgent(finalUserAgent)
+        ? buildChromeClientHints(finalUserAgent, platformProfile)
+        : null;
+    const resolvedTimezone = resolveSessionTimezone(locale, timezone, geolocation);
+    const browserProfile = buildBrowserProfile({
+        locale,
+        timezone: resolvedTimezone,
+        userAgent: finalUserAgent,
+        platformProfile,
+        chromeHints,
+        width,
+        height,
+        deviceScaleFactor,
+        geolocation
+    });
     console.log(width)
     console.log(height)
-    // Define default headers after destructuring
-    const defaultHeaders = {
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Accept-Encoding': 'gzip, deflate, br',
-        'DNT': '1',
-        'Connection': 'keep-alive',
-        'Upgrade-Insecure-Requests': '1',
-        'Sec-Fetch-Dest': 'document',
-        'Sec-Fetch-Mode': 'navigate',
-        'Sec-Fetch-Site': 'none',
-        'Sec-Fetch-User': '?1',
-        'Cache-Control': 'max-age=0'
-    };
-
-    // Use default headers if none provided
-    const headers = headersParam ? { ...headersParam } : { ...defaultHeaders };
+    const headers = buildConsistentHeaders({
+        locale,
+        userAgent: finalUserAgent,
+        customHeaders: headersParam,
+        chromeHints
+    });
     
     const browserArgs = [...BROWSER_ARGS];
 
@@ -1747,8 +2120,8 @@ const createSession = async (req, res) => {
                     break;
                 }
             }
-        } else if (userDataDir) {
-            // Fallback to session-based directory if no profileId but userDataDir is true
+        } else if (userDataDir || persistSession) {
+            // Persist cookies/localStorage between sessions for realistic storage state
             launchOptions.userDataDir = `./sessions/${sessionId}`;
         }
 
@@ -1758,11 +2131,7 @@ const createSession = async (req, res) => {
         
         // Set locale settings
         const languageCode = locale.split('-')[0];
-        const acceptLanguage = `${locale},${languageCode};q=0.9,en;q=0.8`;
-        
-        // Update Accept-Language in headers
-        headers['Accept-Language'] = acceptLanguage;
-        
+
         // Add extra arguments for locale
         launchOptions.args.push(
             `--lang=${locale}`,
@@ -1783,7 +2152,7 @@ const createSession = async (req, res) => {
         const viewportSettings = {
             width: viewportWidth,
             height: viewportHeight,
-            deviceScaleFactor: 1,
+            deviceScaleFactor: deviceScaleFactor || 1,
             isMobile: false,
             hasTouch: false,
             isLandscape: viewportWidth > viewportHeight
@@ -1811,8 +2180,24 @@ const createSession = async (req, res) => {
             `--window-size=${viewportWidth},${viewportHeight}`,
         );
 
+        // Prefer installed Google Chrome for closer TLS/HTTP fingerprint (fallback to bundled Chromium)
+        if (!process.env.PUPPETEER_EXECUTABLE_PATH) {
+            launchOptions.channel = process.env.PUPPETEER_CHANNEL || 'chrome';
+        }
+
         // Launch browser and create page
-        const browser = await puppeteer.launch(launchOptions);
+        let browser;
+        try {
+            browser = await puppeteer.launch(launchOptions);
+        } catch (launchError) {
+            if (launchOptions.channel) {
+                console.warn(`Failed to launch with channel "${launchOptions.channel}", falling back to bundled Chromium:`, launchError.message);
+                delete launchOptions.channel;
+                browser = await puppeteer.launch(launchOptions);
+            } else {
+                throw launchError;
+            }
+        }
         const context = browser.defaultBrowserContext();
 
         // Set up realistic permissions
@@ -1829,130 +2214,15 @@ const createSession = async (req, res) => {
 
         const page = await browser.newPage();
 
-        // Set browser headers with our configured headers
         const browserHeaders = {
             ...headers,
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-            'Cache-Control': 'no-cache',
-            'Pragma': 'no-cache',
-            'Sec-CH-UA': '"Google Chrome";v="120", "Not A(Brand";v="24", "Chromium";v="120"',
-            'Sec-CH-UA-Mobile': '?0',
-            'Sec-CH-UA-Platform': '"Windows"',
-            'Sec-CH-UA-Platform-Version': '"15.0.0"',
             'Sec-Fetch-Dest': 'document',
             'Sec-Fetch-Mode': 'navigate',
             'Sec-Fetch-Site': 'same-origin',
             'Upgrade-Insecure-Requests': '1'
         };
 
-        // Set the headers and user agent
-        await page.setExtraHTTPHeaders(browserHeaders);
-        await page.setUserAgent(userAgent);
-
-        // Set viewport
-        await page.setViewport(launchOptions.defaultViewport);
-
-        // If timezone is provided, emulate it
-        if (timezone) {
-            try {
-                await page.emulateTimezone(timezone);
-            } catch (tzError) {
-                console.warn(`Failed to set timezone "${timezone}":`, tzError.message);
-            }
-        }
-        
-        // Override navigator properties to match the specified locale and enhance realism
-        await page.evaluateOnNewDocument((locale, languageCode) => {
-            // Language and locale
-            Object.defineProperty(navigator, 'language', { get: () => locale });
-            Object.defineProperty(navigator, 'languages', { 
-                get: () => [locale, languageCode, 'en-US', 'en'] 
-            });
-            
-            // WebDriver detection
-            Object.defineProperty(navigator, 'webdriver', { 
-                get: () => false 
-            });
-            
-            // Platform
-            Object.defineProperty(navigator, 'platform', { 
-                get: () => 'Win32' 
-            });
-            
-            // Connection
-            const connection = navigator.connection || {};
-            Object.defineProperty(navigator, 'connection', {
-                get: () => ({
-                    ...connection,
-                    downlink: 10,
-                    effectiveType: '4g',
-                    rtt: 50,
-                    saveData: false,
-                    type: 'wifi'
-                })
-            });
-            
-            // Hardware concurrency
-            Object.defineProperty(navigator, 'hardwareConcurrency', { 
-                value: 8 
-            });
-            
-            // Device memory (in GB)
-            Object.defineProperty(navigator, 'deviceMemory', { 
-                value: 8 
-            });
-            
-            // Max touch points
-            Object.defineProperty(navigator, 'maxTouchPoints', { 
-                value: 0 
-            });
-            
-            // User agent data
-            if ('userAgentData' in navigator) {
-                Object.defineProperty(navigator, 'userAgentData', {
-                    get: () => ({
-                        brands: [
-                            { brand: 'Google Chrome', version: '120' },
-                            { brand: 'Not A;Brand', version: '99' },
-                            { brand: 'Chromium', version: '120' }
-                        ],
-                        mobile: false,
-                        platform: 'Windows'
-                    })
-                });
-            }
-            
-            // WebGL vendor and renderer
-            const getParameter = WebGLRenderingContext.prototype.getParameter;
-            WebGLRenderingContext.prototype.getParameter = function(parameter) {
-                // UNMASKED_VENDOR_WEBGL
-                if (parameter === 37445) {
-                    return 'Google Inc.';
-                }
-                // UNMASKED_RENDERER_WEBGL
-                if (parameter === 37446) {
-                    return 'ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)';
-                }
-                return getParameter(parameter);
-            };
-            
-            // Disable permissions.query function
-            const originalQuery = window.navigator.permissions?.query;
-            if (originalQuery) {
-                window.navigator.permissions.query = (parameters) => (
-                    parameters.name === 'notifications' ? 
-                        Promise.resolve({ state: Notification.permission }) :
-                        originalQuery(parameters)
-                );
-            }
-            
-            // Disable notifications permission request
-            const originalRequestPermission = Notification.requestPermission;
-            Notification.requestPermission = function() {
-                return Promise.resolve('denied');
-            };
-            
-        }, locale, languageCode);
+        await setupPageRealism(page, browserProfile, browserHeaders);
 
         // Relay console logs from the page to Node (helps surface evaluateOnNewDocument logs)
         const attachConsoleRelay = (p) => {
@@ -1973,7 +2243,10 @@ const createSession = async (req, res) => {
         browser.on('targetcreated', async target => {
             try {
                 const newPage = await target.page();
-                if (newPage) attachConsoleRelay(newPage);
+                if (newPage) {
+                    attachConsoleRelay(newPage);
+                    await setupPageRealism(newPage, browserProfile, browserHeaders);
+                }
             } catch (e) {
                 // ignore
             }
@@ -2135,87 +2408,7 @@ const createSession = async (req, res) => {
 
         // Apply stealth mode if enabled
         if (stealth) {
-            await page.evaluateOnNewDocument(() => {
-                // WebDriver detection
-                Object.defineProperty(navigator, 'webdriver', {
-                    get: () => false,
-                });
-
-                // Chrome object mocking
-                window.chrome = window.chrome || {};
-                window.chrome.runtime = {};
-                
-                // Plugins spoofing
-                Object.defineProperty(navigator, 'plugins', {
-                    get: () => [1, 2, 3, 4, 5], // Mock plugins array
-                });
-
-                // Languages spoofing
-                Object.defineProperty(navigator, 'languages', {
-                    get: () => ['en-US', 'en'],
-                    configurable: false,
-                    writable: false
-                });
-
-                // Permissions spoofing
-                const originalQuery = window.navigator.permissions.query;
-                window.navigator.permissions.query = (parameters) => (
-                    parameters.name === 'notifications' ?
-                        Promise.resolve({ state: 'denied' }) :
-                        originalQuery(parameters)
-                );
-
-                // WebGL vendor and renderer spoofing
-                const getParameter = WebGLRenderingContext.prototype.getParameter;
-                WebGLRenderingContext.prototype.getParameter = function(parameter) {
-                    // UNMASKED_VENDOR_WEBGL
-                    if (parameter === 37445) {
-                        return 'Google Inc. (NVIDIA)';
-                    }
-                    // UNMASKED_RENDERER_WEBGL
-                    if (parameter === 37446) {
-                        return 'ANGLE (NVIDIA, NVIDIA GeForce RTX 3080 Direct3D11 vs_5_0 ps_5_0, D3D11)';
-                    }
-                    return getParameter(parameter);
-                };
-
-                // Prevent detection of headless Chrome
-                Object.defineProperty(navigator, 'plugins', {
-                    get: () => [1, 2, 3, 4, 5],
-                });
-
-                // Override the languages property to prevent modification
-                const originalLanguages = Object.getOwnPropertyDescriptor(navigator, 'languages');
-                Object.defineProperty(navigator, 'languages', {
-                    ...originalLanguages,
-                    value: ['en-US', 'en'],
-                    configurable: false,
-                    writable: false
-                });
-
-                // Mock permissions
-                const originalPermissions = {
-                    query: window.navigator.permissions.query,
-                    request: window.navigator.permissions.request,
-                    revoke: window.navigator.permissions.revoke
-                };
-
-                window.navigator.permissions.query = (parameters) => {
-                    if (parameters.name === 'notifications') {
-                        return Promise.resolve({ state: 'denied' });
-                    }
-                    return originalPermissions.query(parameters);
-                };
-            });
-
-            // Set additional HTTP headers
-            await page.setExtraHTTPHeaders(headers);
-            
-            // Set viewport and other browser-like properties
-            await page.setViewport(launchOptions.defaultViewport);
             await page.setBypassCSP(true);
-
-            // Disable timeout for page load
             page.setDefaultNavigationTimeout(0);
             page.setDefaultTimeout(60000);
         }
@@ -2264,33 +2457,8 @@ const createSession = async (req, res) => {
             }
         }
 
-        // Set custom user agent or default
-        const finalUserAgent = userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-        await page.setUserAgent(finalUserAgent);
-
-        // Set custom headers
-        const defaultHeaders = {
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-            'Accept-Language': `${locale},en;q=0.9`,
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Connection': 'keep-alive',
-            'Upgrade-Insecure-Requests': '1',
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'none',
-            'Sec-Fetch-User': '?1',
-            'Cache-Control': 'max-age=0',
-            'sec-ch-ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
-            'sec-ch-ua-mobile': '?0',
-            'sec-ch-ua-platform': '"Windows"'
-        };
-
-        // Set viewport with the configured settings
-        await page.setViewport(launchOptions.defaultViewport);
-
-        // Merge custom headers with defaults
-        const finalHeaders = { ...defaultHeaders, ...headers };
-        await page.setExtraHTTPHeaders(finalHeaders);
+        const finalHeaders = { ...headers };
+        const persistStorage = Boolean(profileId || userDataDir || persistSession);
         // Store session
         sessions.set(sessionId, {
             browser,
@@ -2313,7 +2481,24 @@ const createSession = async (req, res) => {
                 geolocationOrigin: geolocationOrigin || null, // deprecated in favor of geolocationOrigins
                 geolocationOrigins: geoOrigins,
                 grantGeolocationOnNavigation: Boolean(grantGeolocationOnNavigation),
-                timezone: timezone || null
+                timezone: resolvedTimezone,
+                deviceScaleFactor,
+                persistStorage,
+                realismProfile: {
+                    locale,
+                    timezone: resolvedTimezone,
+                    platform: platformProfile.navigatorPlatform,
+                    secChUa: chromeHints?.secChUa || null,
+                    webgl: browserProfile.webgl,
+                    screen: browserProfile.screen,
+                    permissions: browserProfile.permissions
+                },
+                networkProfile: {
+                    proxyConfigured: Boolean(proxy),
+                    note: proxy
+                        ? 'Traffic routed through configured proxy'
+                        : 'Use a residential/mobile proxy for realistic IP reputation during security testing'
+                }
             }
         });
         const extPage = (await browser.pages())[0];
@@ -2339,7 +2524,10 @@ const createSession = async (req, res) => {
                 width,
                 height,
                 userAgent: finalUserAgent,
-                locale
+                locale,
+                timezone: resolvedTimezone,
+                persistStorage,
+                secChUa: chromeHints?.secChUa || null
             }
         });
     } catch (error) {
