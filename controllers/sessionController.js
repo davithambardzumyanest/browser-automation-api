@@ -3217,6 +3217,148 @@ const typeSession = async (req, res) => {
 };
 
 /**
+ * Select one or more options in a select element.
+ * Resolves requested values against the UI-visible option labels/text, then selects them.
+ */
+const selectOptionSession = async (req, res) => {
+    const { sessionId } = req.params;
+    const {
+        selector,
+        value,
+        values,
+        label,
+        labels,
+        text,
+        texts,
+        index,
+        indexes
+    } = req.body ?? {};
+
+    if (!selector) {
+        return res.status(400).json({
+            error: 'Selector is required'
+        });
+    }
+
+    if (!sessions.has(sessionId)) {
+        return res.status(404).json({
+            error: 'Session not found',
+            message: `Session ${sessionId} does not exist or has expired`
+        });
+    }
+
+    const requestedLabels = [
+        ...(Array.isArray(values) ? values : value !== undefined ? [value] : []),
+        ...(Array.isArray(labels) ? labels : label !== undefined ? [label] : []),
+        ...(Array.isArray(texts) ? texts : text !== undefined ? [text] : []),
+    ].filter(v => v !== undefined && v !== null).map(String);
+
+    const requestedIndexes = [
+        ...(Array.isArray(indexes) ? indexes : index !== undefined ? [index] : []),
+    ].filter(v => v !== undefined && v !== null).map(Number);
+
+    if (!requestedLabels.length && !requestedIndexes.length) {
+        return res.status(400).json({
+            error: 'Option selection is required',
+            message: 'Provide value, values, label, labels, text, texts, index, or indexes'
+        });
+    }
+
+    const session = sessions.get(sessionId);
+    session.lastActivity = Date.now();
+
+    try {
+        const page = await getFirstTab(session);
+        session.page = page;
+
+        await page.waitForSelector(selector, {
+            visible: true,
+            timeout: 10000
+        });
+
+        await page.evaluate(sel => {
+            const element = document.querySelector(sel);
+            if (element) {
+                element.scrollIntoView({
+                    behavior: 'smooth',
+                    block: 'center',
+                    inline: 'nearest'
+                });
+            }
+        }, selector);
+
+        await new Promise(resolve => setTimeout(resolve, getRandomDelay(50, 150)));
+
+        const optionValues = await page.evaluate((sel, labelRequests, indexRequests) => {
+            const element = document.querySelector(sel);
+
+            if (!element) {
+                throw new Error(`No element found for selector: ${sel}`);
+            }
+
+            if (element.tagName.toLowerCase() !== 'select') {
+                throw new Error(`Element matching selector is not a select element: ${sel}`);
+            }
+
+            const options = Array.from(element.options);
+            const valuesByLabel = [];
+            const visibleOptionText = (option) => (option.label || option.textContent || option.text || '').replace(/\s+/g, ' ').trim();
+
+            for (const requestedLabel of labelRequests) {
+                const normalizedRequestedLabel = requestedLabel.replace(/\s+/g, ' ').trim();
+                const option = options.find(opt =>
+                    visibleOptionText(opt) === normalizedRequestedLabel
+                );
+
+                if (!option) {
+                    throw new Error(`No option found with visible text: ${requestedLabel}`);
+                }
+
+                valuesByLabel.push(option.value);
+            }
+
+            const valuesByIndex = [];
+
+            for (const requestedIndex of indexRequests) {
+                if (!Number.isInteger(requestedIndex) || requestedIndex < 0 || requestedIndex >= options.length) {
+                    throw new Error(`Option index out of range: ${requestedIndex}`);
+                }
+
+                valuesByIndex.push(options[requestedIndex].value);
+            }
+
+            return [...valuesByLabel, ...valuesByIndex];
+        }, selector, requestedLabels, requestedIndexes);
+
+        const selectedValues = await page.select(selector, ...optionValues);
+
+        const selectedOptions = await page.evaluate(sel => {
+            const element = document.querySelector(sel);
+            return Array.from(element.selectedOptions).map(option => ({
+                value: option.value,
+                label: option.label,
+                text: option.text
+            }));
+        }, selector);
+
+        res.json({
+            success: true,
+            sessionId,
+            selector,
+            selectedValues,
+            selectedOptions
+        });
+    } catch (error) {
+        console.error('Error selecting option:', error);
+        res.status(500).json({
+            error: 'Failed to select option',
+            message: error.message,
+            details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        });
+    }
+};
+
+/**
  * Get the current page content as HTML
  * @param {Object} req - Express request object
  * @param {Object} res - Express response object
@@ -4559,6 +4701,7 @@ module.exports = {
     executeScriptSession,
     clickSession,
     typeSession,
+    selectOptionSession,
     getContentSession,
     simulateUserActions,
     validateGoogle,
