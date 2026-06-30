@@ -1,4 +1,4 @@
-Add Docs# Session API Documentation
+# Session API Documentation
 
 This document covers only the session endpoints exposed by `routes/sessionRoutes.js`.
 
@@ -481,7 +481,127 @@ Uses a more human-like typing flow (scroll into view, optional clear, random typ
 
 ---
 
-## 14) Get Content
+## 14) Fill Image (File Input)
+
+**POST** `/:sessionId/fill-image`
+
+Uploads an image into a `<input type="file">` field. Accepts raw base64 or a data URL (`data:image/png;base64,...`). Optionally resizes and compresses the image in the browser before assigning it to the input.
+
+### What happens internally
+
+1. Waits for the file input selector and scrolls it into view.
+2. Decodes the base64 image in page context.
+3. Optionally scales down using `maxWidth` / `maxHeight`.
+4. Optionally re-encodes with `quality` (JPEG/WebP) to reduce file size.
+5. Creates a `File` object, assigns it to the input, and dispatches `input` + `change` events.
+
+### Request body (example)
+
+```json
+{
+  "selector": "input[type='file'][name='photo']",
+  "image": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQ...",
+  "filename": "profile-photo.jpg",
+  "mimeType": "image/jpeg",
+  "resize": {
+    "maxWidth": 1280,
+    "maxHeight": 1280,
+    "quality": 0.8
+  }
+}
+```
+
+### Parameters
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `selector` | string | yes | CSS selector for the file input |
+| `image` | string | yes | Base64 string or data URL |
+| `filename` | string | no | Uploaded filename (default: `upload.<ext>`) |
+| `mimeType` | string | no | MIME type when not included in data URL (default: `image/png`) |
+| `maxWidth` | number | no | Max output width in pixels |
+| `maxHeight` | number | no | Max output height in pixels |
+| `quality` | number | no | Compression quality `0.1`–`1.0` (JPEG/WebP) |
+| `resize` | object | no | Same as `maxWidth`, `maxHeight`, `quality` grouped |
+
+You can pass resize fields at the top level or inside `resize`:
+
+```json
+{
+  "selector": "#avatar",
+  "image": "<base64>",
+  "maxWidth": 800,
+  "maxHeight": 600,
+  "quality": 0.75
+}
+```
+
+### Success response
+
+```json
+{
+  "success": true,
+  "sessionId": "550e8400-e29b-41d4-a716-446655440000",
+  "message": "Image uploaded to file input successfully",
+  "selector": "input[type='file'][name='photo']",
+  "filename": "profile-photo.jpg",
+  "mimeType": "image/jpeg",
+  "originalSize": 2457600,
+  "fileSize": 186432,
+  "originalWidth": 4032,
+  "originalHeight": 3024,
+  "width": 1280,
+  "height": 960,
+  "resized": true,
+  "compressed": true
+}
+```
+
+### Validation errors
+
+```json
+{
+  "error": "Missing required parameters",
+  "message": "selector is required"
+}
+```
+
+```json
+{
+  "error": "Missing required parameters",
+  "message": "image is required (raw base64 or data URL)"
+}
+```
+
+### Error response
+
+```json
+{
+  "error": "Failed to upload image",
+  "message": "Element is not a file input"
+}
+```
+
+### cURL example
+
+```bash
+IMAGE_B64=$(base64 -w 0 ./photo.jpg)
+
+curl -X POST "http://localhost:3000/api/session/<sessionId>/fill-image" \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"selector\": \"input[type=file]\",
+    \"image\": \"${IMAGE_B64}\",
+    \"filename\": \"photo.jpg\",
+    \"mimeType\": \"image/jpeg\",
+    \"maxWidth\": 1024,
+    \"quality\": 0.85
+  }"
+```
+
+---
+
+## 15) Get Content
 
 **POST** `/:sessionId/content`
 
@@ -512,7 +632,7 @@ Returns full page HTML when no selector is passed, or selector text content when
 
 ---
 
-## 15) Get Rendered HTML
+## 16) Get Rendered HTML
 
 **GET** `/:sessionId/html`
 
@@ -543,7 +663,7 @@ Waits for network idle, does a short scroll pass to trigger lazy loads, then ret
 
 ---
 
-## 16) Simulate User Actions
+## 17) Simulate User Actions
 
 **POST** `/:sessionId/simulate-actions`
 
@@ -583,7 +703,7 @@ Starts asynchronous background simulation (scrolling, mouse movement, typing, id
 
 ---
 
-## 17) Validate Google
+## 18) Validate Google
 
 **POST** `/:sessionId/validate-google`
 
@@ -608,7 +728,7 @@ No request body required.
 
 ---
 
-## 18) Solve reCAPTCHA
+## 19) Solve reCAPTCHA
 
 **POST** `/:sessionId/solve-recaptcha`
 
@@ -659,7 +779,7 @@ Extracts reCAPTCHA metadata from the active page, requests solution from 2Captch
 
 ---
 
-## 19) Configure 2Captcha
+## 20) Configure 2Captcha
 
 **POST** `/:sessionId/configure-2captcha`
 
@@ -703,7 +823,7 @@ Configures 2Captcha extension settings for the session page (API key, proxy, pro
 
 ---
 
-## 20) Validate 2Captcha Config
+## 21) Validate 2Captcha Config
 
 **GET** `/:sessionId/validate-2captcha`
 
@@ -727,7 +847,7 @@ Reads extension config state and returns whether required values are present.
 
 ---
 
-## 21) Diagnose 2Captcha
+## 22) Diagnose 2Captcha
 
 **GET** `/:sessionId/diagnose-2captcha`
 
@@ -756,7 +876,7 @@ Runs deeper diagnostics against extension availability/config and returns health
 
 ---
 
-## 22) Scroll To Bottom
+## 23) Scroll To Bottom
 
 **POST** `/:sessionId/scroll-to-bottom`
 

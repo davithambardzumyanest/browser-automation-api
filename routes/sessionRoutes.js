@@ -19,6 +19,7 @@ router.post('/:sessionId/check-xpath', sessionController.checkXPath);
 router.post('/:sessionId/type', sessionController.typeSession);
 router.post('/:sessionId/select', sessionController.selectOptionSession);
 router.post('/:sessionId/fill', sessionController.fillInput);
+router.post('/:sessionId/fill-image', sessionController.fillImageInput);
 router.post('/:sessionId/content', sessionController.getContentSession);
 router.get('/:sessionId/html', sessionController.getPageHTML);
 router.post('/:sessionId/simulate-actions', sessionController.simulateUserActions);
