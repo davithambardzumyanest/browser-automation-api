@@ -607,6 +607,11 @@ curl -X POST "http://localhost:3000/api/session/<sessionId>/fill-image" \
 
 Selects one or more options in a `<select>` element. Supports AI-powered matching to handle abbreviations, variations, and fuzzy matching when enabled.
 
+Select matches against each option's **value**, **label**, and **visible text** (case-insensitive, with partial match fallback). Hidden native `<select>` elements (common behind custom dropdown UIs) are still supported.
+
+If `selector` points at an `<option>`, `<optgroup>`, `<label>`, or wrapper around a select, the API resolves the parent/associated `<select>` and reads options from it (useful for AI agents that target child nodes).
+
+
 ### Request body (example)
 
 ```json
@@ -622,10 +627,10 @@ Selects one or more options in a `<select>` element. Supports AI-powered matchin
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `selector` | string | yes | CSS selector for the select element |
-| `value` / `values` | string/string[] | no | Option value(s) to select |
-| `label` / `labels` | string/string[] | no | Option label(s) to select |
-| `text` / `texts` | string/string[] | no | Option text(s) to select |
+| `selector` | string | yes | CSS selector for the select element (or an option/label/wrapper that resolves to it) |
+| `value` / `values` | string/string[] | no | Option `value`, label, or visible text to select (case-insensitive) |
+| `label` / `labels` | string/string[] | no | Option label(s) to select (also matched against value/text) |
+| `text` / `texts` | string/string[] | no | Option text(s) to select (also matched against value/label) |
 | `index` / `indexes` | number/number[] | no | Option index/indices (0-based) |
 | `useAI` | boolean | no | Enable AI-powered matching (default: `false`) |
 | `context` | string | no | Additional context for AI matching |
@@ -633,13 +638,27 @@ Selects one or more options in a `<select>` element. Supports AI-powered matchin
 ### AI-Powered Matching
 
 When `useAI: true` is set:
-- AI analyzes available options and matches user input intelligently
+- First tries deterministic matching on option **value**, **label**, and **text**
+- If no direct match, sends the **full available options list** to OpenAI and asks it to pick the best index
 - Handles abbreviations (e.g., "US" → "United States")
-- Handles variations (e.g., "USA" → "United States of America")
-- Handles fuzzy matching (e.g., "UK" → "United Kingdom")
-- Falls back to exact matching if AI fails
+- Handles numeric / range intent (e.g., `"1"` → `"Less than 5"`, `"10"` → `"6-50"`)
+- Handles fuzzy / semantic matching (e.g., "UK" → "United Kingdom")
+- Skips placeholders like "Select..." unless explicitly requested
 
 **Requires:** `OPENAI_API_KEY` environment variable
+
+Example when the form has ranges and the agent sends a raw number:
+
+```json
+{
+  "selector": "select[name='employeeCount']",
+  "value": "1",
+  "useAI": true,
+  "context": "Company employee count dropdown"
+}
+```
+
+AI can resolve `"1"` to `"Less than 5"` from options like `Less than 5`, `6-50`, `More than 50`.
 
 ### Success response (without AI)
 
@@ -709,7 +728,7 @@ When `useAI: true` is set:
 ```json
 {
   "error": "Failed to select option",
-  "message": "No option found with visible text: US"
+  "message": "No option found matching \"US\". Available options: us (\"United States\"), ca (\"Canada\")"
 }
 ```
 
