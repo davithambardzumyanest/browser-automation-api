@@ -2,9 +2,13 @@ const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const { v4: uuidv4 } = require('uuid');
 const { cleanupStaleProfileLocks } = require('../utils/browserProfile');
+const AIService = require('../services/aiService');
 
 // Add stealth plugin
 puppeteer.use(StealthPlugin());
+
+// Initialize AI service on startup
+AIService.initialize();
 
 // Session storage
 const sessions = new Map();
@@ -2881,7 +2885,7 @@ const executeScriptSession = async (req, res) => {
     session.lastUsed = Date.now();
 
     try {
-        const result = await session.page.evaluate(script);
+        const result = await session.page.evaluate(`(() => { ${script} })()`);
 
         res.json({
             success: true,
@@ -3250,6 +3254,7 @@ const typeSession = async (req, res) => {
 /**
  * Select one or more options in a select element.
  * Resolves requested values against the UI-visible option labels/text, then selects them.
+ * Supports AI-powered matching when useAI flag is enabled.
  */
 const selectOptionSession = async (req, res) => {
     const { sessionId } = req.params;
@@ -3262,7 +3267,9 @@ const selectOptionSession = async (req, res) => {
         text,
         texts,
         index,
-        indexes
+        indexes,
+        useAI = false,
+        context = ''
     } = req.body ?? {};
 
     if (!selector) {
@@ -3320,6 +3327,50 @@ const selectOptionSession = async (req, res) => {
 
         await new Promise(resolve => setTimeout(resolve, getRandomDelay(50, 150)));
 
+        // Get all available options for AI matching
+        const availableOptions = await page.evaluate(sel => {
+            const element = document.querySelector(sel);
+            if (!element || element.tagName.toLowerCase() !== 'select') {
+                return null;
+            }
+            return Array.from(element.options).map(opt => ({
+                value: opt.value,
+                label: opt.label || opt.textContent || opt.text || '',
+                text: opt.textContent || opt.text || ''
+            }));
+        }, selector);
+
+        if (!availableOptions) {
+            throw new Error(`Element matching selector is not a select element: ${selector}`);
+        }
+
+        let finalLabels = [...requestedLabels];
+
+        // Use AI to match labels if enabled
+        if (useAI && requestedLabels.length > 0 && AIService.isAvailable()) {
+            console.log('🤖 Using AI-powered option matching...');
+            
+            for (let i = 0; i < requestedLabels.length; i++) {
+                try {
+                    const matchedOption = await AIService.matchOption(
+                        requestedLabels[i],
+                        availableOptions,
+                        context
+                    );
+
+                    if (matchedOption) {
+                        console.log(`🎯 AI matched "${requestedLabels[i]}" to "${matchedOption.label}"`);
+                        finalLabels[i] = matchedOption.label;
+                    } else {
+                        console.log(`⚠️ AI could not find match for "${requestedLabels[i]}", using original value`);
+                    }
+                } catch (error) {
+                    console.error(`❌ AI matching failed for "${requestedLabels[i]}":`, error.message);
+                    // Fall back to original value if AI fails
+                }
+            }
+        }
+
         const optionValues = await page.evaluate((sel, labelRequests, indexRequests) => {
             const element = document.querySelector(sel);
 
@@ -3359,7 +3410,7 @@ const selectOptionSession = async (req, res) => {
             }
 
             return [...valuesByLabel, ...valuesByIndex];
-        }, selector, requestedLabels, requestedIndexes);
+        }, selector, finalLabels, requestedIndexes);
 
         const selectedValues = await page.select(selector, ...optionValues);
 
@@ -3377,7 +3428,13 @@ const selectOptionSession = async (req, res) => {
             sessionId,
             selector,
             selectedValues,
-            selectedOptions
+            selectedOptions,
+            aiMatching: {
+                enabled: useAI,
+                available: AIService.isAvailable(),
+                requested: requestedLabels,
+                matched: useAI && AIService.isAvailable() ? finalLabels : null
+            }
         });
     } catch (error) {
         console.error('Error selecting option:', error);

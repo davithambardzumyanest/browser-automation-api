@@ -601,7 +601,152 @@ curl -X POST "http://localhost:3000/api/session/<sessionId>/fill-image" \
 
 ---
 
-## 15) Get Content
+## 15) Select Option (AI-Powered)
+
+**POST** `/:sessionId/select`
+
+Selects one or more options in a `<select>` element. Supports AI-powered matching to handle abbreviations, variations, and fuzzy matching when enabled.
+
+### Request body (example)
+
+```json
+{
+  "selector": "select[name='country']",
+  "value": "US",
+  "useAI": true,
+  "context": "Country selection for shipping address"
+}
+```
+
+### Request fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `selector` | string | yes | CSS selector for the select element |
+| `value` / `values` | string/string[] | no | Option value(s) to select |
+| `label` / `labels` | string/string[] | no | Option label(s) to select |
+| `text` / `texts` | string/string[] | no | Option text(s) to select |
+| `index` / `indexes` | number/number[] | no | Option index/indices (0-based) |
+| `useAI` | boolean | no | Enable AI-powered matching (default: `false`) |
+| `context` | string | no | Additional context for AI matching |
+
+### AI-Powered Matching
+
+When `useAI: true` is set:
+- AI analyzes available options and matches user input intelligently
+- Handles abbreviations (e.g., "US" → "United States")
+- Handles variations (e.g., "USA" → "United States of America")
+- Handles fuzzy matching (e.g., "UK" → "United Kingdom")
+- Falls back to exact matching if AI fails
+
+**Requires:** `OPENAI_API_KEY` environment variable
+
+### Success response (without AI)
+
+```json
+{
+  "success": true,
+  "sessionId": "550e8400-e29b-41d4-a716-446655440000",
+  "selector": "select[name='country']",
+  "selectedValues": ["us"],
+  "selectedOptions": [
+    {
+      "value": "us",
+      "label": "United States",
+      "text": "United States"
+    }
+  ],
+  "aiMatching": {
+    "enabled": false,
+    "available": true,
+    "requested": ["US"],
+    "matched": null
+  }
+}
+```
+
+### Success response (with AI)
+
+```json
+{
+  "success": true,
+  "sessionId": "550e8400-e29b-41d4-a716-446655440000",
+  "selector": "select[name='country']",
+  "selectedValues": ["us"],
+  "selectedOptions": [
+    {
+      "value": "us",
+      "label": "United States",
+      "text": "United States"
+    }
+  ],
+  "aiMatching": {
+    "enabled": true,
+    "available": true,
+    "requested": ["US"],
+    "matched": ["United States"]
+  }
+}
+```
+
+### Validation errors
+
+```json
+{
+  "error": "Selector is required"
+}
+```
+
+```json
+{
+  "error": "Option selection is required",
+  "message": "Provide value, values, label, labels, text, texts, index, or indexes"
+}
+```
+
+### Error response (no match)
+
+```json
+{
+  "error": "Failed to select option",
+  "message": "No option found with visible text: US"
+}
+```
+
+### cURL example (without AI)
+
+```bash
+curl -X POST "http://localhost:3000/api/session/<sessionId>/select" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "selector": "select[name='country']",
+    "value": "United States"
+  }'
+```
+
+### cURL example (with AI)
+
+```bash
+curl -X POST "http://localhost:3000/api/session/<sessionId>/select" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "selector": "select[name='country']",
+    "value": "US",
+    "useAI": true,
+    "context": "Country selection for shipping address"
+  }'
+```
+
+### Environment setup for AI
+
+```bash
+# Add to .env file
+OPENAI_API_KEY=your_openai_api_key_here
+```
+
+---
+
+## 16) Get Content
 
 **POST** `/:sessionId/content`
 
