@@ -2427,9 +2427,25 @@ const createSession = async (req, res) => {
                 }
             });
         }
+        const stagehand = new Stagehand({
+            env: 'LOCAL',
+            localBrowserLaunchOptions: {
+                cdpUrl: browser.wsEndpoint(),
+                viewport: {
+                    width: viewportSettings.width || 1920,
+                    height: viewportSettings.height || 1080
+                }
+            },
+            model: 'openai/gpt-5',
+            disablePino: true,
+            sessionId,
+            verbose: 2
+        });
+        await stagehand.init()
         // Store browser and page references in session
         const sessionData = {
             browser,
+            stagehand,
             page,
             userAgent: userAgent,
             lastActivity: Date.now(),
@@ -2498,6 +2514,8 @@ const createSession = async (req, res) => {
         // Store session
         sessions.set(sessionId, {
             browser,
+            stagehand,
+            agent: stagehand.agent(),
             page,
             created: Date.now(),
             lastUsed: Date.now(),
@@ -6035,23 +6053,24 @@ const runStagehandSession = async (req, res) => {
                 message: 'Could not resolve a CDP websocket URL for this browser session'
             });
         }
+        //
+        // stagehand = new Stagehand({
+        //     env: 'LOCAL',
+        //     localBrowserLaunchOptions: {
+        //         cdpUrl,
+        //         viewport: {
+        //             width: session.config?.width || 1920,
+        //             height: session.config?.height || 1080
+        //         }
+        //     },
+        //     model,
+        //     verbose: Number.isInteger(verbose) && verbose >= 0 && verbose <= 2 ? verbose : 1,
+        //     disablePino: true,
+        //     sessionId
+        // });
 
-        stagehand = new Stagehand({
-            env: 'LOCAL',
-            localBrowserLaunchOptions: {
-                cdpUrl,
-                viewport: {
-                    width: session.config?.width || 1920,
-                    height: session.config?.height || 1080
-                }
-            },
-            model,
-            verbose: Number.isInteger(verbose) && verbose >= 0 && verbose <= 2 ? verbose : 1,
-            disablePino: true,
-            sessionId
-        });
-
-        await stagehand.init();
+        stagehand = session.stagehand
+        // await stagehand.init();
 
         let result;
         if (mode === 'act') {
@@ -6065,9 +6084,9 @@ const runStagehandSession = async (req, res) => {
                 new Promise((_, reject) => setTimeout(() => reject(new Error('Stagehand observation timed out')), stagehandTimeoutMs))
             ]);
         } else {
-            const agent = stagehand.agent();
+            // const agent = stagehand.agent();
             result = await Promise.race([
-                agent.execute(message),
+                session.agent.execute(message),
                 new Promise((_, reject) => setTimeout(() => reject(new Error('Stagehand agent timed out')), stagehandTimeoutMs))
             ]);
         }
@@ -6098,7 +6117,7 @@ const runStagehandSession = async (req, res) => {
     } finally {
         if (stagehand) {
             try {
-                await stagehand.close();
+                // await stagehand.close();
             } catch (closeError) {
                 console.warn('Failed to close Stagehand connection:', closeError.message);
             }
