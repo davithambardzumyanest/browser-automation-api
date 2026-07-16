@@ -12,6 +12,7 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@browserbasehq/stagehand": "^3.7.0",
     "2captcha": "^3.0.5-2",
     "axios": "^1.13.6",
     "cors": "^2.8.5",
@@ -26,6 +27,7 @@
     "puppeteer": "^24.25.0",
     "puppeteer-extra": "^3.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2",
-    "uuid": "^9.0.1"
+    "uuid": "^9.0.1",
+    "zod": "^3.25.76"
   }
 }

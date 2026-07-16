@@ -176,7 +176,17 @@ Content-Type: application/json
   "script": "return Array.from(document.querySelectorAll('h3')).map(h => h.textContent)"
 }
 
-### 12. Click Element
+### 12. Run Stagehand Actions From Message
+POST http://localhost:3000/api/session/{sessionId}/stagehand
+Content-Type: application/json
+
+{
+  "message": "Search for Stagehand browser automation docs and open the most relevant result",
+  "mode": "agent",
+  "timeoutMs": 120000
+}
+
+### 13. Click Element
 POST http://localhost:3000/api/session/{sessionId}/click
 Content-Type: application/json
 
@@ -184,7 +194,7 @@ Content-Type: application/json
   "selector": "input[name='btnK']"
 }
 
-### 13. Type Text
+### 14. Type Text
 POST http://localhost:3000/api/session/{sessionId}/type
 Content-Type: application/json
 
@@ -194,7 +204,7 @@ Content-Type: application/json
   "delay": 100
 }
 
-### 14. Get Page Content
+### 15. Get Page Content
 POST http://localhost:3000/api/session/{sessionId}/content
 Content-Type: application/json
 
@@ -202,16 +212,16 @@ Content-Type: application/json
   "selector": "body"
 }
 
-### 15. Get Full HTML
+### 16. Get Full HTML
 POST http://localhost:3000/api/session/{sessionId}/content
 Content-Type: application/json
 
 {}
 
-### 16. Close Session
+### 17. Close Session
 DELETE http://localhost:3000/api/session/{sessionId}
 
-### 17. Close All Sessions
+### 18. Close All Sessions
 DELETE http://localhost:3000/api/session/
 
 ### ===== COMPLETE WORKFLOW EXAMPLES =====

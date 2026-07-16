@@ -330,7 +330,55 @@ Runs JavaScript in the page context using `page.evaluate(script)`.
 
 ---
 
-## 10) Click Element
+## 10) Run Stagehand Actions
+
+**POST** `/:sessionId/stagehand`
+
+Attaches Stagehand to the existing browser session over CDP and performs the action(s) described in the request `message` field. The session's cookies, current page, and browser state are preserved.
+
+### Request body (example)
+
+```json
+{
+  "message": "Find the pricing page and open it",
+  "mode": "agent",
+  "model": "openai/gpt-4.1-mini",
+  "timeoutMs": 120000
+}
+```
+
+### Request body fields
+
+- `message` (required) - Natural-language action(s) for Stagehand to perform.
+- `mode` (optional, default: `agent`) - Use `agent` for multi-step tasks, `act` for a single action, or `observe` to return candidate actions.
+- `model` (optional, default: `STAGEHAND_MODEL` or `openai/gpt-4.1-mini`) - Stagehand model name.
+- `timeoutMs` (optional, default: `120000`) - Maximum execution time in milliseconds.
+
+### Environment
+
+- `OPENAI_API_KEY` is loaded from `.env` and used by Stagehand for OpenAI models.
+- `STAGEHAND_MODEL` may be set in `.env` to change the default model.
+
+### Success response
+
+```json
+{
+  "success": true,
+  "sessionId": "550e8400-e29b-41d4-a716-446655440000",
+  "mode": "agent",
+  "message": "Find the pricing page and open it",
+  "result": {},
+  "pageInfo": {
+    "title": "Pricing",
+    "url": "https://example.com/pricing",
+    "timestamp": "2026-07-15T12:00:00.000Z"
+  }
+}
+```
+
+---
+
+## 11) Click Element
 
 **POST** `/:sessionId/click`
 

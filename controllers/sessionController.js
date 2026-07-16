@@ -1,5 +1,6 @@
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+const { Stagehand } = require('@browserbasehq/stagehand');
 const { v4: uuidv4 } = require('uuid');
 const { cleanupStaleProfileLocks } = require('../utils/browserProfile');
 const AIService = require('../services/aiService');
@@ -5971,6 +5972,140 @@ const refreshSession = async (req, res) => {
     }
 };
 
+const runStagehandSession = async (req, res) => {
+    const { sessionId } = req.params;
+    const {
+        message,
+        model = process.env.STAGEHAND_MODEL || 'openai/gpt-4.1-mini',
+        mode = 'agent',
+        timeoutMs = 120000,
+        verbose = 1
+    } = req.body ?? {};
+
+    if (!message || typeof message !== 'string' || !message.trim()) {
+        return res.status(400).json({
+            error: 'Message is required',
+            message: 'Provide a non-empty message field describing the action(s) Stagehand should perform'
+        });
+    }
+
+    if (!['agent', 'act', 'observe'].includes(mode)) {
+        return res.status(400).json({
+            error: 'Invalid mode',
+            message: 'mode must be one of: agent, act, observe'
+        });
+    }
+
+    if (typeof model !== 'string' || !model.trim()) {
+        return res.status(400).json({
+            error: 'Invalid model',
+            message: 'model must be a non-empty Stagehand model name string'
+        });
+    }
+
+    const stagehandTimeoutMs = Number(timeoutMs);
+    if (!Number.isFinite(stagehandTimeoutMs) || stagehandTimeoutMs <= 0) {
+        return res.status(400).json({
+            error: 'Invalid timeoutMs',
+            message: 'timeoutMs must be a positive number'
+        });
+    }
+
+    if (!sessions.has(sessionId)) {
+        return res.status(404).json({
+            error: 'Session not found',
+            message: `Session ${sessionId} does not exist or has expired`
+        });
+    }
+
+    const session = sessions.get(sessionId);
+    session.lastUsed = Date.now();
+    session.lastActivity = Date.now();
+
+    let stagehand;
+
+    try {
+        const page = await getFirstTab(session);
+        session.page = page;
+
+        const cdpUrl = session.browser.wsEndpoint();
+        if (!cdpUrl) {
+            return res.status(500).json({
+                error: 'Stagehand unavailable',
+                message: 'Could not resolve a CDP websocket URL for this browser session'
+            });
+        }
+
+        stagehand = new Stagehand({
+            env: 'LOCAL',
+            localBrowserLaunchOptions: {
+                cdpUrl,
+                viewport: {
+                    width: session.config?.width || 1920,
+                    height: session.config?.height || 1080
+                }
+            },
+            model,
+            verbose: Number.isInteger(verbose) && verbose >= 0 && verbose <= 2 ? verbose : 1,
+            disablePino: true,
+            sessionId
+        });
+
+        await stagehand.init();
+
+        let result;
+        if (mode === 'act') {
+            result = await Promise.race([
+                stagehand.act(message),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Stagehand action timed out')), stagehandTimeoutMs))
+            ]);
+        } else if (mode === 'observe') {
+            result = await Promise.race([
+                stagehand.observe(message),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Stagehand observation timed out')), stagehandTimeoutMs))
+            ]);
+        } else {
+            const agent = stagehand.agent();
+            result = await Promise.race([
+                agent.execute(message),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Stagehand agent timed out')), stagehandTimeoutMs))
+            ]);
+        }
+
+        const activePage = await getFirstTab(session);
+        session.page = activePage;
+        session.lastUsed = Date.now();
+        session.lastActivity = Date.now();
+
+        res.json({
+            success: true,
+            sessionId,
+            mode,
+            message,
+            result,
+            pageInfo: {
+                title: await activePage.title(),
+                url: activePage.url(),
+                timestamp: new Date().toISOString()
+            }
+        });
+    } catch (error) {
+        console.error(`Error running Stagehand in session ${sessionId}:`, error);
+        res.status(500).json({
+            error: 'Failed to run Stagehand action',
+            message: error.message
+        });
+    } finally {
+        if (stagehand) {
+            try {
+                await stagehand.close();
+            } catch (closeError) {
+                console.warn('Failed to close Stagehand connection:', closeError.message);
+            }
+        }
+    }
+};
+
 module.exports = {
     createSession,
     listSessions,
@@ -5995,5 +6130,6 @@ module.exports = {
     validate2CaptchaEndpoint,
     diagnose2CaptchaEndpoint,
     solveRecaptchaEndpoint,
-    refreshSession
+    refreshSession,
+    runStagehandSession
 };
