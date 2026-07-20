@@ -2436,7 +2436,7 @@ const createSession = async (req, res) => {
                     height: viewportSettings.height || 1080
                 }
             },
-            model: 'openai/gpt-5',
+            model: 'openai/gpt-5.4',
             disablePino: true,
             sessionId,
             verbose: 2
