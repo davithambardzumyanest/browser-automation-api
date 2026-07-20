@@ -28,7 +28,6 @@ const BROWSER_ARGS = [
     '--no-zygote',
     '--disable-gpu',
     '--disable-blink-features=AutomationControlled',
-    '--disable-features=IsolateOrigins,site-per-process',
     '--disable-infobars',
     '--window-size=1920,1080',
     '--start-maximized',
@@ -62,13 +61,11 @@ const BROWSER_ARGS = [
     '--force-color-profile=srgb',
     '--no-default-browser-check',
     '--no-service-autorun',
-    '--deny-permission-prompts',
     '--disable-search-geolocation-disclosure',
-    '--disable-features=site-per-process',
     '--disable-blink-features',
     '--autoplay-policy=no-user-gesture-required',
     '--enable-features=MediaSource',
-    '--disable-blink-features=AutomationControlled',
+    '--ignore-certificate-errors'
 ];
 
 // Common Chrome user agents (version must match Client Hints below)
