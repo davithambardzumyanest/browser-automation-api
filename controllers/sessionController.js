@@ -2436,7 +2436,12 @@ const createSession = async (req, res) => {
             model: 'openai/gpt-5.4',
             disablePino: true,
             sessionId,
-            verbose: 2
+            verbose: 2,
+            // Required for the agent `messages` continuation feature used in
+            // runStagehandSession to keep the CUA conversation alive across
+            // separate /stagehand calls instead of restarting fresh each time.
+            experimental: true,
+            disableAPI: true
         });
         await stagehand.init()
         // Store browser and page references in session
@@ -5994,7 +5999,8 @@ const runStagehandSession = async (req, res) => {
         model = process.env.STAGEHAND_MODEL || 'openai/gpt-4.1-mini',
         mode = 'agent',
         timeoutMs = 120000,
-        verbose = 1
+        verbose = 1,
+        resetConversation = false
     } = req.body ?? {};
 
     if (!message || typeof message !== 'string' || !message.trim()) {
@@ -6082,10 +6088,27 @@ const runStagehandSession = async (req, res) => {
             ]);
         } else {
             // const agent = stagehand.agent();
+            if (resetConversation) {
+                session.agentMessages = undefined;
+            }
+
+            const agentOptions = { instruction: message };
+            if (session.agentMessages) {
+                // Continue the same CUA conversation so the agent remembers what it
+                // already did (page state, prior actions). Without this, every call
+                // starts a brand-new conversation and the agent tends to re-orient by
+                // re-navigating/reloading the page instead of picking up where it left off.
+                agentOptions.messages = session.agentMessages;
+            }
+
             result = await Promise.race([
-                session.agent.execute(message),
+                session.agent.execute(agentOptions),
                 new Promise((_, reject) => setTimeout(() => reject(new Error('Stagehand agent timed out')), stagehandTimeoutMs))
             ]);
+
+            if (result?.messages) {
+                session.agentMessages = result.messages;
+            }
         }
 
         const activePage = await getFirstTab(session);
