@@ -4481,6 +4481,13 @@ const selectOptionSession = async (req, res) => {
  */
 const getRandomDelay = (min, max) => Math.random() * (max - min) + min;
 
+// Keep typing well under the 30s cap even for very long text, leaving
+// headroom for the clear/scroll/enter delays and waitForSelector.
+const TYPING_TIME_BUDGET_MS = 20000;
+// Below this per-character delay, per-keystroke CDP overhead alone risks
+// blowing the budget, so we stop typing character-by-character.
+const MIN_TYPE_DELAY_MS = 8;
+
 /**
  * Simulate human-like typing with random delays and occasional mistakes
  * @param {Page} page - Puppeteer page object
@@ -4489,6 +4496,8 @@ const getRandomDelay = (min, max) => Math.random() * (max - min) + min;
  * @param {boolean} pressEnter - Whether to press Enter after typing
  */
 async function humanType(page, selector, text, pressEnter = false, clearInput = false, fast = false) {
+    const str = String(text);
+
     // Conditionally clear the input if requested
     if (clearInput) {
         try {
@@ -4513,8 +4522,34 @@ async function humanType(page, selector, text, pressEnter = false, clearInput = 
         }
     }
 
-    // Type per-character with higher delay for slower, human-like typing
-    await page.type(selector, String(text), { delay: getRandomDelay(80, 160) });
+    if (str.length > 0) {
+        // Scale the per-character delay down as text gets longer so total
+        // typing time stays within TYPING_TIME_BUDGET_MS regardless of length.
+        const idealDelay = TYPING_TIME_BUDGET_MS / str.length;
+
+        if (idealDelay < MIN_TYPE_DELAY_MS) {
+            // Too long to type character-by-character within the budget -
+            // set the value directly so the fill still completes in well under 30s.
+            await page.evaluate((sel, value) => {
+                const input = document.querySelector(sel);
+                if (input) {
+                    input.focus();
+                    if ('value' in input) {
+                        input.value = value;
+                    } else {
+                        input.textContent = value;
+                    }
+                    const evOpts = { bubbles: true, cancelable: true };
+                    input.dispatchEvent(new Event('input', evOpts));
+                    input.dispatchEvent(new Event('change', evOpts));
+                }
+            }, selector, str);
+        } else {
+            const maxDelay = Math.min(160, idealDelay);
+            const minDelay = Math.min(80, maxDelay);
+            await page.type(selector, str, { delay: getRandomDelay(minDelay, maxDelay) });
+        }
+    }
 
     // Optionally press Enter
     if (pressEnter) {
