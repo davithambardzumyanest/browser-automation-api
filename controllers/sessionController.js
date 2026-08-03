@@ -3025,19 +3025,42 @@ const clickSession = async (req, res) => {
             let attempts = 0;
             while (attempts < maxAttempts) {
                 try {
-                    // Wait for the element to be in the DOM and visible
-                    await page.waitForSelector(selector, { 
-                        visible: true,
-                        timeout: 5000 
-                    });
-                    
-                    // Get all matching elements
-                    const elements = await page.$$(selector);
-                    
+                    // Wait for the element to be in the DOM and visible on the main page
+                    let elements = [];
+                    try {
+                        await page.waitForSelector(selector, {
+                            visible: true,
+                            timeout: 5000
+                        });
+                        elements = await page.$$(selector);
+                    } catch (_) {
+                        // Not on the main page - fall through and check frames below
+                    }
+
+                    // If not found on the main page, the element may live inside an iframe
+                    if (elements.length === 0) {
+                        for (const frame of page.frames()) {
+                            if (frame === page.mainFrame()) continue;
+                            try {
+                                await frame.waitForSelector(selector, {
+                                    visible: true,
+                                    timeout: 2000
+                                });
+                                const frameElements = await frame.$$(selector);
+                                if (frameElements.length > 0) {
+                                    elements = frameElements;
+                                    break;
+                                }
+                            } catch (_) {
+                                // Selector not in this frame, try the next one
+                            }
+                        }
+                    }
+
                     if (elements.length === 0) {
                         throw new Error('No elements found');
                     }
-                    
+
                     // Try to find a clickable element
                     for (const el of elements) {
                         try {
@@ -3069,7 +3092,9 @@ await new Promise(resolve => setTimeout(resolve, 500)); // Wait for scroll to co
                     attempts++;
                     console.log(`Attempt ${attempts}/${maxAttempts} failed:`, e.message);
                     if (attempts >= maxAttempts) {
-                        throw e;
+                        // Throw a clean error instead of leaking Puppeteer's raw
+                        // TimeoutError (with its noisy nested `cause` stack) up to callers.
+                        throw new Error(`Element not found (selector: ${selector}) on the page or in any accessible frame after ${maxAttempts} attempts`);
                     }
                     await new Promise(resolve => setTimeout(resolve, 1000)); // Wait before retry
                 }
