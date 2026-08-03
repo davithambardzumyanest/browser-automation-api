@@ -4506,12 +4506,11 @@ const selectOptionSession = async (req, res) => {
  */
 const getRandomDelay = (min, max) => Math.random() * (max - min) + min;
 
-// Keep typing well under the 30s cap even for very long text, leaving
-// headroom for the clear/scroll/enter delays and waitForSelector.
-const TYPING_TIME_BUDGET_MS = 20000;
-// Below this per-character delay, per-keystroke CDP overhead alone risks
-// blowing the budget, so we stop typing character-by-character.
-const MIN_TYPE_DELAY_MS = 8;
+// Above this length, character-by-character page.type() is too slow no matter
+// how small the requested delay is - each keystroke is its own CDP round trip,
+// so per-char overhead (not just the `delay` option) dominates for long text.
+// 150 chars keeps worst-case human typing (150 * 160ms) under 25s.
+const HUMAN_TYPE_MAX_LENGTH = 50;
 
 /**
  * Simulate human-like typing with random delays and occasional mistakes
@@ -4548,13 +4547,12 @@ async function humanType(page, selector, text, pressEnter = false, clearInput = 
     }
 
     if (str.length > 0) {
-        // Scale the per-character delay down as text gets longer so total
-        // typing time stays within TYPING_TIME_BUDGET_MS regardless of length.
-        const idealDelay = TYPING_TIME_BUDGET_MS / str.length;
-
-        if (idealDelay < MIN_TYPE_DELAY_MS) {
-            // Too long to type character-by-character within the budget -
-            // set the value directly so the fill still completes in well under 30s.
+        if (str.length <= HUMAN_TYPE_MAX_LENGTH) {
+            // Short enough to type character-by-character within the time budget.
+            await page.type(selector, str, { delay: getRandomDelay(80, 160) });
+        } else {
+            // Too long to type character-by-character in reasonable time -
+            // set the value directly so the fill completes almost instantly.
             await page.evaluate((sel, value) => {
                 const input = document.querySelector(sel);
                 if (input) {
@@ -4569,10 +4567,6 @@ async function humanType(page, selector, text, pressEnter = false, clearInput = 
                     input.dispatchEvent(new Event('change', evOpts));
                 }
             }, selector, str);
-        } else {
-            const maxDelay = Math.min(160, idealDelay);
-            const minDelay = Math.min(80, maxDelay);
-            await page.type(selector, str, { delay: getRandomDelay(minDelay, maxDelay) });
         }
     }
 
