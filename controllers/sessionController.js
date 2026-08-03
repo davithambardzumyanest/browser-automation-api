@@ -3025,36 +3025,17 @@ const clickSession = async (req, res) => {
             let attempts = 0;
             while (attempts < maxAttempts) {
                 try {
-                    // Wait for the element to be in the DOM and visible on the main page
-                    let elements = [];
-                    try {
-                        await page.waitForSelector(selector, {
-                            visible: true,
-                            timeout: 5000
-                        });
-                        elements = await page.$$(selector);
-                    } catch (_) {
-                        // Not on the main page - fall through and check frames below
+                    // Locate whichever frame currently has the selector - main page or any
+                    // (possibly nested) iframe - polling as frames attach/navigate, and
+                    // falling back to shadow-piercing lookups for closed/open shadow roots.
+                    const frame = await findFrameWithSelector(page, selector, 5000);
+                    if (!frame) {
+                        throw new Error('No elements found');
                     }
 
-                    // If not found on the main page, the element may live inside an iframe
+                    let elements = await frame.$$(selector);
                     if (elements.length === 0) {
-                        for (const frame of page.frames()) {
-                            if (frame === page.mainFrame()) continue;
-                            try {
-                                await frame.waitForSelector(selector, {
-                                    visible: true,
-                                    timeout: 100
-                                });
-                                const frameElements = await frame.$$(selector);
-                                if (frameElements.length > 0) {
-                                    elements = frameElements;
-                                    break;
-                                }
-                            } catch (_) {
-                                // Selector not in this frame, try the next one
-                            }
-                        }
+                        elements = await frame.$$(`pierce/${selector}`).catch(() => []);
                     }
 
                     if (elements.length === 0) {
