@@ -3044,7 +3044,7 @@ const clickSession = async (req, res) => {
                             try {
                                 await frame.waitForSelector(selector, {
                                     visible: true,
-                                    timeout: 2000
+                                    timeout: 100
                                 });
                                 const frameElements = await frame.$$(selector);
                                 if (frameElements.length > 0) {
