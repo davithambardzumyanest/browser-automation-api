@@ -1,6 +1,5 @@
 const puppeteer = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
-const { Stagehand } = require('@browserbasehq/stagehand');
 const { v4: uuidv4 } = require('uuid');
 const { cleanupStaleProfileLocks } = require('../utils/browserProfile');
 const AIService = require('../services/aiService');
@@ -363,6 +362,40 @@ const registerBrowserRealism = async (page, profile) => {
             } catch (_) {}
         };
 
+        // Real native functions stringify to "function name() { [native code] }".
+        // Every override below (permissions.query, Notification.requestPermission,
+        // Intl.DateTimeFormat, resolvedOptions, WebGL getParameter) replaces a
+        // native API with plain JS, so .toString() - and the harder-to-spoof
+        // Function.prototype.toString.call(fn) - would otherwise leak real JS
+        // source instead of the native stub. That mismatch is one of the most
+        // common ways fingerprinting scripts (FingerprintJS, CreepJS, etc.)
+        // unmask patched APIs. Cloak each override here so both call styles
+        // report back as native. Patching Function.prototype.toString itself
+        // (rather than each function's own .toString) also covers
+        // Function.prototype.toString.call(fn), and safely layers on top of
+        // whatever puppeteer-extra-plugin-stealth already did to it, since
+        // uncloaked functions fall through to whatever was there before.
+        const nativeToStringMap = new WeakMap();
+        const originalFunctionToString = Function.prototype.toString;
+        const cloakAsNative = (fn, nativeName) => {
+            try {
+                nativeToStringMap.set(fn, `function ${nativeName}() { [native code] }`);
+            } catch (_) {}
+            return fn;
+        };
+        try {
+            const toStringProxy = new Proxy(originalFunctionToString, {
+                apply(target, thisArg, args) {
+                    if (nativeToStringMap.has(thisArg)) {
+                        return nativeToStringMap.get(thisArg);
+                    }
+                    return Reflect.apply(target, thisArg, args);
+                }
+            });
+            cloakAsNative(toStringProxy, 'toString');
+            Function.prototype.toString = toStringProxy;
+        } catch (_) {}
+
         defineGetter(navigator, 'webdriver', () => false);
         defineGetter(navigator, 'language', () => locale);
         defineGetter(navigator, 'languages', () => [locale, languageCode, 'en-US', 'en']);
@@ -421,28 +454,31 @@ const registerBrowserRealism = async (page, profile) => {
         const patchWebGL = (Context) => {
             if (!Context || !Context.prototype) return;
             const originalGetParameter = Context.prototype.getParameter;
-            Context.prototype.getParameter = function getParameter(parameter) {
+            const patchedGetParameter = function getParameter(parameter) {
                 if (parameter === 37445) return webgl.vendor;
                 if (parameter === 37446) return webgl.renderer;
                 return originalGetParameter.call(this, parameter);
             };
+            Context.prototype.getParameter = cloakAsNative(patchedGetParameter, 'getParameter');
         };
         patchWebGL(window.WebGLRenderingContext);
         patchWebGL(window.WebGL2RenderingContext);
 
         const originalPermissionsQuery = navigator.permissions?.query?.bind(navigator.permissions);
         if (originalPermissionsQuery) {
-            navigator.permissions.query = (parameters) => {
+            const patchedQuery = (parameters) => {
                 const name = parameters?.name;
                 if (name && Object.prototype.hasOwnProperty.call(permissions, name)) {
                     return Promise.resolve({ state: permissions[name], onchange: null });
                 }
                 return originalPermissionsQuery(parameters);
             };
+            navigator.permissions.query = cloakAsNative(patchedQuery, 'query');
         }
 
         if (typeof Notification !== 'undefined' && Notification.requestPermission) {
-            Notification.requestPermission = () => Promise.resolve(permissions.notifications);
+            const patchedRequestPermission = () => Promise.resolve(permissions.notifications);
+            Notification.requestPermission = cloakAsNative(patchedRequestPermission, 'requestPermission');
         }
 
         window.chrome = window.chrome || {};
@@ -450,19 +486,22 @@ const registerBrowserRealism = async (page, profile) => {
         window.chrome.app = window.chrome.app || { isInstalled: false };
 
         const OriginalDateTimeFormat = Intl.DateTimeFormat;
-        Intl.DateTimeFormat = function DateTimeFormat(locales, options) {
+        const PatchedDateTimeFormat = function DateTimeFormat(locales, options) {
             const opts = options ? { ...options } : {};
             if (!opts.timeZone) opts.timeZone = timezone;
             return new OriginalDateTimeFormat(locales, opts);
         };
-        Intl.DateTimeFormat.prototype = OriginalDateTimeFormat.prototype;
-        Intl.DateTimeFormat.supportedLocalesOf = OriginalDateTimeFormat.supportedLocalesOf;
+        cloakAsNative(PatchedDateTimeFormat, 'DateTimeFormat');
+        PatchedDateTimeFormat.prototype = OriginalDateTimeFormat.prototype;
+        PatchedDateTimeFormat.supportedLocalesOf = OriginalDateTimeFormat.supportedLocalesOf;
+        Intl.DateTimeFormat = PatchedDateTimeFormat;
 
         const originalResolvedOptions = OriginalDateTimeFormat.prototype.resolvedOptions;
-        OriginalDateTimeFormat.prototype.resolvedOptions = function resolvedOptions() {
+        const patchedResolvedOptions = function resolvedOptions() {
             const result = originalResolvedOptions.call(this);
             return { ...result, timeZone: timezone };
         };
+        OriginalDateTimeFormat.prototype.resolvedOptions = cloakAsNative(patchedResolvedOptions, 'resolvedOptions');
     }, profile);
 };
 
@@ -2287,24 +2326,21 @@ const createSession = async (req, res) => {
             `--window-size=${viewportWidth},${viewportHeight}`,
         );
 
-        // Prefer installed Google Chrome for closer TLS/HTTP fingerprint (fallback to bundled Chromium)
-        if (!process.env.PUPPETEER_EXECUTABLE_PATH) {
-            launchOptions.channel = process.env.PUPPETEER_CHANNEL || 'chrome';
-        }
-
-        // Launch browser and create page
-        let browser;
-        try {
-            browser = await puppeteer.launch(launchOptions);
-        } catch (launchError) {
-            if (launchOptions.channel) {
-                console.warn(`Failed to launch with channel "${launchOptions.channel}", falling back to bundled Chromium:`, launchError.message);
-                delete launchOptions.channel;
-                browser = await puppeteer.launch(launchOptions);
-            } else {
-                throw launchError;
-            }
-        }
+        // Deliberately launching Puppeteer's bundled Chromium here rather than
+        // a real installed Google Chrome (previously done via
+        // `launchOptions.channel = 'chrome'`). Official Google Chrome builds
+        // carry proprietary Google integration that open-source Chromium
+        // doesn't have - notably the X-Client-Data header (Chrome's
+        // variations/field-trial system, gated behind an embedded official
+        // Google API key) sent on every request to *.google.com, plus its
+        // own Safe Browsing/telemetry channels. That's a signal Google's own
+        // servers read directly, independent of any proxy/UA/fingerprint
+        // spoofing done elsewhere in this file - and unlike userDataDir, nothing
+        // here guarantees it's fresh per session. Bundled Chromium has no
+        // official API key, so it doesn't participate in that channel at all.
+        // Confirmed empirically: switching off the real-Chrome channel made
+        // the reCAPTCHA challenge stop appearing.
+        const browser = await puppeteer.launch(launchOptions);
         const context = browser.defaultBrowserContext();
 
         // Set up realistic permissions. 'geolocation' is deliberately NOT
@@ -6206,110 +6242,25 @@ const runStagehandSession = async (req, res) => {
         });
     }
 
-    const session = sessions.get(sessionId);
-    session.lastUsed = Date.now();
-    session.lastActivity = Date.now();
-
-    let stagehand;
-
-    try {
-        const page = await getFirstTab(session);
-        session.page = page;
-
-        const cdpUrl = session.browser.wsEndpoint();
-        if (!cdpUrl) {
-            return res.status(500).json({
-                error: 'Stagehand unavailable',
-                message: 'Could not resolve a CDP websocket URL for this browser session'
-            });
-        }
-        //
-        // stagehand = new Stagehand({
-        //     env: 'LOCAL',
-        //     localBrowserLaunchOptions: {
-        //         cdpUrl,
-        //         viewport: {
-        //             width: session.config?.width || 1920,
-        //             height: session.config?.height || 1080
-        //         }
-        //     },
-        //     model,
-        //     verbose: Number.isInteger(verbose) && verbose >= 0 && verbose <= 2 ? verbose : 1,
-        //     disablePino: true,
-        //     sessionId
-        // });
-
-        stagehand = session.stagehand
-        // await stagehand.init();
-
-        let result;
-        if (mode === 'act') {
-            result = await Promise.race([
-                stagehand.act(message),
-                new Promise((_, reject) => setTimeout(() => reject(new Error('Stagehand action timed out')), stagehandTimeoutMs))
-            ]);
-        } else if (mode === 'observe') {
-            result = await Promise.race([
-                stagehand.observe(message),
-                new Promise((_, reject) => setTimeout(() => reject(new Error('Stagehand observation timed out')), stagehandTimeoutMs))
-            ]);
-        } else {
-            // const agent = stagehand.agent();
-            if (resetConversation) {
-                session.agentMessages = undefined;
-            }
-
-            const agentOptions = { instruction: message };
-            if (session.agentMessages) {
-                // Continue the same CUA conversation so the agent remembers what it
-                // already did (page state, prior actions). Without this, every call
-                // starts a brand-new conversation and the agent tends to re-orient by
-                // re-navigating/reloading the page instead of picking up where it left off.
-                agentOptions.messages = session.agentMessages;
-            }
-
-            result = await Promise.race([
-                session.agent.execute(agentOptions),
-                new Promise((_, reject) => setTimeout(() => reject(new Error('Stagehand agent timed out')), stagehandTimeoutMs))
-            ]);
-
-            if (result?.messages) {
-                session.agentMessages = result.messages;
-            }
-        }
-
-        const activePage = await getFirstTab(session);
-        session.page = activePage;
-        session.lastUsed = Date.now();
-        session.lastActivity = Date.now();
-
-        res.json({
-            success: true,
-            sessionId,
-            mode,
-            message,
-            result,
-            pageInfo: {
-                title: await activePage.title(),
-                url: activePage.url(),
-                timestamp: new Date().toISOString()
-            }
+    if (!sessions.has(sessionId)) {
+        return res.status(404).json({
+            error: 'Session not found',
+            message: `Session ${sessionId} does not exist or has expired`
         });
-    } catch (error) {
-        console.error(`Error running Stagehand in session ${sessionId}:`, error);
-        res.status(500).json({
-            error: 'Failed to run Stagehand action',
-            message: error.message
-        });
-    } finally {
-        if (stagehand) {
-            try {
-                // await stagehand.close();
-            } catch (closeError) {
-                console.warn('Failed to close Stagehand connection:', closeError.message);
-            }
-        }
     }
+
+    // Stagehand is no longer initialized in createSession: its "piercer" init
+    // script injected literal global markers (window.__stagehandV3__,
+    // window.__stagehandV3Injected) and an uncloaked Element.prototype.
+    // attachShadow patch into every page of every session, whether or not
+    // this endpoint was ever called - a trivially fingerprintable automation
+    // signature for zero benefit on sessions that only use goto/fill/click.
+    // AI-driven actions via Stagehand are unavailable until that's wired up
+    // as an explicit, opt-in per-session upgrade instead of an always-on cost.
+    return res.status(501).json({
+        error: 'Stagehand unavailable',
+        message: 'AI-driven actions are disabled: Stagehand is no longer initialized for every session because its injected script left a fingerprintable automation signature on every page regardless of use. Use /goto, /fill, /click, etc. instead.'
+    });
 };
 
 module.exports = {
