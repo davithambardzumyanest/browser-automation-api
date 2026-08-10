@@ -27,6 +27,7 @@ const BROWSER_ARGS = [
     '--no-first-run',
     '--no-zygote',
     '--disable-gpu',
+    '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
     '--disable-blink-features=AutomationControlled',
     '--disable-infobars',
     '--window-size=1920,1080',
@@ -179,34 +180,25 @@ const applyChromeIdentity = async (page, userAgent, platformProfile) => {
     return chromeHints;
 };
 
-const buildConsistentHeaders = ({ locale, userAgent, customHeaders = {}, chromeHints = null }) => {
+// IMPORTANT: this only feeds page.setExtraHTTPHeaders(), which applies the given
+// headers to EVERY request the page makes (navigations, XHR/fetch, subresources)
+// for the lifetime of the page - it does not vary per request the way a real
+// browser does. Headers that a real browser computes dynamically per-request
+// (Accept, Sec-Fetch-*, Upgrade-Insecure-Requests, Cache-Control/Pragma) must
+// NOT be forced here: doing so previously made every request on the page carry
+// document-navigation values (e.g. Sec-Fetch-Site: same-origin/none on XHR calls,
+// or on the very first cross-site navigation where a real browser sends "none").
+// That static, request-type-invariant header combination is a well-known and
+// trivially server-detectable bot signal, independent of proxy/IP rotation.
+// Chrome already sets these correctly per-request on its own (and Sec-CH-UA-*
+// is derived automatically from the userAgentMetadata passed to
+// page.setUserAgent(), see applyChromeIdentity), so only locale needs forcing.
+const buildConsistentHeaders = ({ locale, customHeaders = {} }) => {
     const languageCode = String(locale || 'en-US').split('-')[0];
-    const platform = detectPlatformFromUA(userAgent);
-    const hints = chromeHints || (isChromeUserAgent(userAgent)
-        ? buildChromeClientHints(userAgent, platform)
-        : null);
 
     const defaultHeaders = {
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-        'Accept-Language': `${locale},${languageCode};q=0.9,en;q=0.8`,
-        'Accept-Encoding': 'gzip, deflate, br',
-        'Connection': 'keep-alive',
-        'Upgrade-Insecure-Requests': '1',
-        'Sec-Fetch-Dest': 'document',
-        'Sec-Fetch-Mode': 'navigate',
-        'Sec-Fetch-Site': 'none',
-        'Sec-Fetch-User': '?1',
-        'Cache-Control': 'max-age=0',
-        'Pragma': 'no-cache',
-        'Sec-CH-UA-Mobile': '?0',
-        'Sec-CH-UA-Platform': platform.secChUaPlatform,
-        'Sec-CH-UA-Platform-Version': platform.secChUaPlatformVersion
+        'Accept-Language': `${locale},${languageCode};q=0.9,en;q=0.8`
     };
-
-    if (hints) {
-        defaultHeaders['Sec-CH-UA'] = hints.secChUa;
-        defaultHeaders['Sec-CH-UA-Full-Version-List'] = hints.secChUaFullVersionList;
-    }
 
     return { ...defaultHeaders, ...customHeaders };
 };
@@ -225,6 +217,30 @@ const LOCALE_TIMEZONE_DEFAULTS = {
     'ko-KR': 'Asia/Seoul',
     'zh-CN': 'Asia/Shanghai'
 };
+
+// The UA is randomly chosen from Windows/macOS/Linux (see USER_AGENTS), so the
+// spoofed WebGL vendor/renderer string must match that platform. Previously
+// this was hardcoded to a Windows-only "Direct3D11" ANGLE backend regardless of
+// which OS the UA/Sec-CH-UA-Platform claimed, which is an internally
+// inconsistent fingerprint (e.g. a macOS UA reporting a Windows D3D11 GPU
+// backend) that's detectable without needing any network-level signal at all.
+const WEBGL_PROFILES = {
+    '"Windows"': {
+        vendor: 'Google Inc. (Intel)',
+        renderer: 'ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)'
+    },
+    '"macOS"': {
+        vendor: 'Google Inc. (Apple)',
+        renderer: 'ANGLE (Apple, ANGLE Metal Renderer: Apple M1, Unspecified Version)'
+    },
+    '"Linux"': {
+        vendor: 'Google Inc. (Intel)',
+        renderer: 'ANGLE (Intel, Mesa Intel(R) UHD Graphics 630 (CFL GT2), OpenGL 4.6)'
+    }
+};
+
+const getWebglProfile = (platformProfile) =>
+    WEBGL_PROFILES[platformProfile?.secChUaPlatform] || WEBGL_PROFILES['"Windows"'];
 
 const resolveSessionTimezone = (locale, timezone, geolocation) => {
     if (timezone) return timezone;
@@ -276,10 +292,7 @@ const buildBrowserProfile = ({
             innerWidth: viewportWidth,
             innerHeight: viewportHeight
         },
-        webgl: {
-            vendor: 'Google Inc. (Intel)',
-            renderer: 'ANGLE (Intel, Intel(R) UHD Graphics 630 Direct3D11 vs_5_0 ps_5_0, D3D11)'
-        },
+        webgl: getWebglProfile(platformProfile),
         hardware: {
             hardwareConcurrency: 8,
             deviceMemory: 8,
@@ -2134,17 +2147,18 @@ const createSession = async (req, res) => {
         }
 
         // Set up user data directory
+        let ephemeralProfileDir = null;
         if (profileId) {
             // Use profile-based directory if profileId is provided
             const profileDir = `./profiles/account_${profileId}`;
             launchOptions.userDataDir = profileDir;
-            
+
             // Ensure the directory exists
             const fs = require('fs');
             if (!fs.existsSync(launchOptions.userDataDir)) {
                 fs.mkdirSync(launchOptions.userDataDir, { recursive: true });
             }
-            
+
             // Check if there's an existing session with the same profileId and close it
             for (const [existingSessionId, session] of sessions.entries()) {
                 if (session.profileId === profileId) {
@@ -2156,6 +2170,18 @@ const createSession = async (req, res) => {
         } else if (userDataDir || persistSession) {
             // Persist cookies/localStorage between sessions for realistic storage state
             launchOptions.userDataDir = `./sessions/${sessionId}`;
+        } else {
+            // No profile requested: give this session its own throwaway directory
+            // instead of leaving userDataDir unset. Google (and most fraud
+            // engines) fingerprint the profile itself - cookies, localStorage,
+            // IndexedDB, Google's own device/session cookies - not just the
+            // network layer. Relying on Puppeteer's implicit default keeps
+            // sessions isolated in practice, but making it explicit here means
+            // it's guaranteed and we control cleanup, so no two "no profile"
+            // sessions can ever end up sharing a directory (and therefore
+            // cookies/device identity) across different proxies/IPs.
+            launchOptions.userDataDir = `./sessions/ephemeral-${sessionId}`;
+            ephemeralProfileDir = launchOptions.userDataDir;
         }
 
         if (launchOptions.userDataDir) {
@@ -2247,15 +2273,13 @@ const createSession = async (req, res) => {
 
         const page = await browser.newPage();
 
-        const browserHeaders = {
-            ...headers,
-            'Sec-Fetch-Dest': 'document',
-            'Sec-Fetch-Mode': 'navigate',
-            'Sec-Fetch-Site': 'same-origin',
-            'Upgrade-Insecure-Requests': '1'
-        };
-
-        await setupPageRealism(page, browserProfile, browserHeaders);
+        // Do not force Sec-Fetch-*/Upgrade-Insecure-Requests here: those are
+        // per-request, browser-computed headers. Statically pinning them (this
+        // used to hardcode Sec-Fetch-Site: same-origin onto every single
+        // request, including the very first cross-site navigation, where a
+        // real browser sends "none") is an easy, IP-independent bot signal.
+        // Let Chrome's own network stack set them; only locale is forced.
+        await setupPageRealism(page, browserProfile, headers);
 
         // Relay console logs from the page to Node (helps surface evaluateOnNewDocument logs)
         const attachConsoleRelay = (p) => {
@@ -2278,7 +2302,7 @@ const createSession = async (req, res) => {
                 const newPage = await target.page();
                 if (newPage) {
                     attachConsoleRelay(newPage);
-                    await setupPageRealism(newPage, browserProfile, browserHeaders);
+                    await setupPageRealism(newPage, browserProfile, headers);
                 }
             } catch (e) {
                 // ignore
@@ -2522,6 +2546,7 @@ const createSession = async (req, res) => {
             created: Date.now(),
             lastUsed: Date.now(),
             profileId: profileId || null, // Store the profileId with the session
+            ephemeralProfileDir, // set when no profile/persistence was requested; removed on close
             config: {
                 headless,
                 width,
@@ -4947,6 +4972,18 @@ const closeSession = async (sessionId) => {
             console.error(`Error closing session ${sessionId}:`, error);
         }
         sessions.delete(sessionId);
+
+        // Remove the throwaway per-session profile dir created for sessions
+        // that didn't request a persistent profileId/userDataDir, so it can't
+        // accumulate on disk or accidentally get reused by a later session.
+        if (session.ephemeralProfileDir) {
+            try {
+                const fs = require('fs');
+                fs.rmSync(session.ephemeralProfileDir, { recursive: true, force: true });
+            } catch (cleanupError) {
+                console.error(`Error removing ephemeral profile dir for session ${sessionId}:`, cleanupError);
+            }
+        }
     }
 };
 
