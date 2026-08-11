@@ -1,5 +1,7 @@
 node_modules/
 profiles/
+sessions/
+user-data/
 .env
 .DS_Store
 *.log
