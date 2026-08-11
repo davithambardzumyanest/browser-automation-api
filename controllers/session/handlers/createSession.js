@@ -8,16 +8,18 @@ const { closeSession } = require('./closeSession');
 const { wait } = require('../helpers/timing');
 const {
     BROWSER_ARGS,
-    getRandomUserAgent,
     detectPlatformFromUA,
     isChromeUserAgent,
     buildChromeClientHints,
+    buildPreferredLanguages,
     resolveSessionTimezone,
     buildBrowserProfile,
     buildConsistentHeaders,
     setupPageRealism,
     sanitizeGeolocation
 } = require('../helpers/browserFingerprint');
+const { getRandomDeviceProfile } = require('../helpers/deviceProfiles');
+const { detectProxyGeo } = require('../helpers/geoip');
 
 /**
  * Create a new browser session with anti-detection measures
@@ -31,30 +33,76 @@ const createSession = async (req, res) => {
     const defaultDevtools = process.env.DEFAULT_DEVTOOLS === 'true' ? true : false;
 
     // First destructure without the headers
+    const body = req.body || {};
     const {
         headless = defaultHeadless,
         width = 1920,
         height = 1080,
-        userAgent = getRandomUserAgent(),
+        userAgent,
         headers: headersParam,
         userDataDir,
         profileId,
-        locale = 'en-US',
         proxy,
         slowMo = defaultSlowMo,
         devtools = defaultDevtools,
         stealth = true,
-        allowMedia = false,
+        // Defaulting this to false used to mean every session, unless a
+        // caller explicitly opted in, never downloaded a single image or
+        // font - blocked twice over (--blink-settings=imagesEnabled=false at
+        // the render layer, plus request.abort() at the network layer below).
+        // A real browser always loads these; Google's servers see the HTML/
+        // CSS/JS requests come in and then literally zero requests ever
+        // arrive for the dozens of image/font URLs referenced inside them -
+        // a structural anomaly no header tuning touches, and it also means
+        // all text renders in a fallback system font instead of the page's
+        // real web font (affects canvas-based text-rendering fingerprints
+        // too). Defaults to loading media now, matching real browsing;
+        // callers that specifically want the bandwidth/speed tradeoff for a
+        // non-detection-sensitive use case can still pass allowMedia:false.
+        allowMedia = true,
         geolocation,
         geolocationOrigin,
         geolocationOrigins,
         grantGeolocationOnNavigation = true,
-        timezone,
         deviceScaleFactor = 1,
         persistSession = false,
-    } = req.body || {};
-    const finalUserAgent = userAgent || getRandomUserAgent();
-    const platformProfile = detectPlatformFromUA(finalUserAgent);
+    } = body;
+
+    let locale = body.locale ?? 'en-US';
+    let timezone = body.timezone;
+
+    // Auto-derive locale/timezone from the proxy's actual egress location
+    // when the caller didn't explicitly pin either and didn't already
+    // supply geolocation.timezone. A static per-locale default (or whatever
+    // locale happened to be requested) has no idea what country THIS
+    // specific proxy/session actually exits from - trusting it is exactly
+    // the kind of mismatch (IP says one place, everything else says
+    // another) that got a session flagged earlier in this investigation.
+    // Never overrides an explicit caller choice, and never fails session
+    // creation if the lookup is slow/unavailable - just falls through to
+    // the existing defaults below.
+    if (proxy && body.locale === undefined && body.timezone === undefined && !geolocation?.timezone) {
+        const proxyGeo = await detectProxyGeo(proxy);
+        if (proxyGeo) {
+            if (proxyGeo.locale) locale = proxyGeo.locale;
+            if (proxyGeo.timezone) timezone = proxyGeo.timezone;
+            console.log(`Auto-detected proxy geo (${proxyGeo.countryCode}): locale=${locale}, timezone=${timezone || '(default)'}`);
+        }
+    }
+
+    // Device identity: when the caller supplies a custom userAgent, keep the
+    // old behavior of deriving platform/WebGL from that string alone (no
+    // bundle exists for an arbitrary UA). Otherwise pick a full, internally-
+    // consistent device profile (UA + WebGL + hardwareConcurrency +
+    // deviceMemory + screen resolution together) instead of randomizing the
+    // UA independently of everything else - see deviceProfiles.js for why.
+    let deviceProfile = null;
+    let finalUserAgent = userAgent;
+    if (!finalUserAgent) {
+        deviceProfile = getRandomDeviceProfile();
+        finalUserAgent = deviceProfile.userAgent;
+    }
+    const platformProfile = deviceProfile?.platformProfile || detectPlatformFromUA(finalUserAgent);
     const chromeHints = isChromeUserAgent(finalUserAgent)
         ? buildChromeClientHints(finalUserAgent, platformProfile)
         : null;
@@ -68,16 +116,12 @@ const createSession = async (req, res) => {
         width,
         height,
         deviceScaleFactor,
-        geolocation
+        geolocation,
+        deviceProfile
     });
     console.log(width)
     console.log(height)
-    const headers = buildConsistentHeaders({
-        locale,
-        userAgent: finalUserAgent,
-        customHeaders: headersParam,
-        chromeHints
-    });
+    const headers = buildConsistentHeaders({ customHeaders: headersParam });
 
     const browserArgs = [...BROWSER_ARGS];
 
@@ -126,11 +170,17 @@ const createSession = async (req, res) => {
                 !arg.includes('--no-zygote')
             );
 
-            // Add args for better visibility in development
-            launchOptions.args.push(
-                '--start-maximized',
-                '--disable-blink-features=AutomationControlled'
-            );
+            // --start-maximized silently wins over --window-size regardless of
+            // argv order - Chrome maximizes to the real host screen resolution
+            // and ignores whatever size was requested. Only maximize when the
+            // caller didn't ask for a specific size (nicer default for
+            // interactive/dev use); otherwise the explicit --window-size push
+            // further down must actually be honored, or every spoofed
+            // viewport/screen/window.outerWidth value is claiming a size the
+            // real on-screen window doesn't have.
+            if (body.width === undefined && body.height === undefined) {
+                launchOptions.args.push('--start-maximized');
+            }
         }
 
         // Add proxy configuration if specified
@@ -187,13 +237,13 @@ const createSession = async (req, res) => {
             cleanupStaleProfileLocks(launchOptions.userDataDir);
         }
 
-        // Set locale settings
-        const languageCode = locale.split('-')[0];
-
-        // Add extra arguments for locale
+        // --accept-lang built from the same list as the Accept-Language header
+        // and navigator.languages (see buildPreferredLanguages) rather than its
+        // own hardcoded template - which for any English-based locale used to
+        // produce "en-US,en,en" (the same tag twice). --lang was already
+        // pushed above; not repeated here.
         launchOptions.args.push(
-            `--lang=${locale}`,
-            `--accept-lang=${locale},${languageCode},en`
+            `--accept-lang=${buildPreferredLanguages(locale).join(',')}`
         );
 
         // If geolocation is requested, avoid hard-deny prompts flag which can conflict with overrides
@@ -527,7 +577,7 @@ const createSession = async (req, res) => {
             browser,
             stagehand,
             page,
-            userAgent: userAgent,
+            userAgent: finalUserAgent,
             lastActivity: Date.now(),
             stealth: stealth,
             proxy: proxy || null,
