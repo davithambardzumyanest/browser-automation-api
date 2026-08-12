@@ -240,6 +240,46 @@ a constant.
 
 ---
 
+### 14. `/stagehand` (AI-driven actions) unconditionally returned 501 after the session-routes refactor
+**Symptom:** Every call to `POST /:sessionId/stagehand` returned
+`501 Stagehand unavailable`, even though `createSession.js` was actively
+constructing a `Stagehand` instance (`session.stagehand`) and an agent
+(`session.agent = stagehand.agent()`) for every session.
+
+**Root cause:** `runStagehandSession.js` had an unconditional `501` stub
+left over from an earlier point in this project's history where Stagehand
+initialization was deliberately removed from `createSession.js` (its init
+script left fingerprintable global markers on every page - see the old
+`Fix Stagehand` history). Stagehand init was later restored in
+`createSession.js`, but during the session-controller split
+(`sessionController.js` → `controllers/session/`) the stub got carried over
+into the new `runStagehandSession.js` handler verbatim instead of being
+reconciled with `createSession.js`'s actual (restored) behavior - the two
+files silently drifted out of sync.
+
+**Fix:** Rewrote `runStagehandSession.js` to use the session's existing
+`session.stagehand` / `session.agent` (already created once, at session
+creation time, in `createSession.js`) instead of constructing a new
+Stagehand instance per call. Mode branching restored: `act`/`observe` call
+`stagehand.act()`/`stagehand.observe()` directly; `agent` mode calls
+`session.agent.execute({instruction, messages: session.agentMessages})`,
+persisting `result.messages` back onto the session so consecutive
+`/stagehand` calls in `agent` mode continue the same CUA conversation
+instead of each one re-orienting from scratch. All three modes race against
+`timeoutMs`. Verified live end-to-end against `https://example.com`: `observe`
+correctly located the "Learn more" link's selector, and `agent` mode clicked
+it and confirmed navigation to `iana.org/help/example-domains`.
+
+**Open tradeoff (unresolved):** Stagehand is still initialized eagerly for
+*every* session in `createSession.js`, regardless of whether `/stagehand` is
+ever called - paying whatever fingerprint cost its injected scripts carry
+even on sessions that only use `/goto`, `/fill`, `/click`, etc. Making this
+lazy (init on first `/stagehand` call) would avoid that cost for the common
+case but wasn't part of this fix - flagging in case detection issues return
+and this is worth revisiting.
+
+---
+
 ## Proxy/network issues (not code bugs)
 
 These were confirmed root causes at various points in this investigation,
@@ -308,18 +348,3 @@ but no amount of browser-fingerprint code change fixes them:
   first - replacing a possibly-correct value with an unverified hand-picked
   list could make it worse.
 
-- **`/stagehand` (AI-driven actions) is currently non-functional.**
-  `runStagehandSession.js` unconditionally returns `501`, left over from
-  when Stagehand initialization was removed from `createSession.js` (its
-  init script set literal global markers `window.__stagehandV3__` /
-  `window.__stagehandV3Injected` and monkey-patched
-  `Element.prototype.attachShadow` with zero `toString` cloaking - a
-  trivially fingerprintable signature applied to every session whether or
-  not the AI endpoint was ever used). Stagehand initialization was
-  subsequently restored in `createSession.js`, but the 501 in
-  `runStagehandSession.js` was never reverted to match. If you need
-  `/stagehand` working again, either wire the endpoint back up to use
-  `session.stagehand`/`session.agent`, or make Stagehand initialization
-  lazy (only on first `/stagehand` call for a session) to get the
-  functionality back without paying the fingerprint cost on sessions that
-  never use it.

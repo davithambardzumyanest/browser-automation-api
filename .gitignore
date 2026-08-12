@@ -1,5 +1,6 @@
 node_modules/
 profiles/
+profile/
 sessions/
 user-data/
 .env
