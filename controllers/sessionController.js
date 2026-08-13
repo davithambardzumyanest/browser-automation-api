@@ -2597,7 +2597,16 @@ const createSession = async (req, res) => {
                     height: viewportSettings.height || 1080
                 }
             },
-            model: 'openai/gpt-5.4',
+            // Configurable via STAGEHAND_MODEL so the model can be tuned
+            // without a code change/redeploy - this is the one place it
+            // actually takes effect. Stagehand is only constructed once, here,
+            // at session creation, and reused for every /stagehand call on
+            // this session afterward - a `model` passed in an individual
+            // /stagehand request body was previously accepted and validated
+            // but silently had no effect, since nothing reconstructed
+            // Stagehand per-call. Removed that dead/misleading parameter -
+            // see runStagehandSession.
+            model: process.env.STAGEHAND_MODEL || 'openai/gpt-5.4',
             disablePino: true,
             sessionId,
             verbose: 2,
@@ -5036,9 +5045,24 @@ const getPageHTML = async (req, res) => {
     }
 
     try {
-        // Wait for network to be idle (Puppeteer's way)
-        await session.page.waitForNetworkIdle({ idleTime: 500, timeout: parseInt(timeout) });
-        
+        // Wait for network to be idle (Puppeteer's way) - best-effort only.
+        // Plenty of real pages (analytics beacons, polling widgets, open
+        // websockets, ad refresh timers) never go a full idleTime without a
+        // request in flight, so this throwing is an expected, common,
+        // recoverable condition, not a sign anything is actually broken. It
+        // used to escalate all the way to the big catch block below, which
+        // then tried the exact same "just grab whatever content() has"
+        // fallback anyway - so the fallback was already proving this doesn't
+        // need to be fatal. Handling it here directly, quietly, skips the
+        // noisy stack-trace log and the belt-and-suspenders round-trip for
+        // what is, in practice, the common case rather than the exception.
+        try {
+            await session.page.waitForNetworkIdle({ idleTime: 500, timeout: parseInt(timeout) });
+        } catch (idleError) {
+            if (idleError.name !== 'TimeoutError') throw idleError;
+            console.log(`[${sessionId}] Page never went network-idle within ${timeout}ms, proceeding with current content anyway`);
+        }
+
         // Scroll to trigger lazy loading
         await session.page.evaluate(async () => {
             await new Promise(resolve => {
@@ -6230,11 +6254,37 @@ const refreshSession = async (req, res) => {
     }
 };
 
+// Distinguishes errors worth retrying (rate limits, transient network/server
+// blips) from ones that won't be fixed by retrying (bad instruction, our own
+// timeout, auth failure). "Sometimes it doesn't work" for an LLM-backed agent
+// loop is very often exactly this class of error - a single retry with a
+// short backoff clears most of them without masking real failures.
+const isTransientStagehandError = (error) => {
+    const status = error?.status || error?.statusCode;
+    if ([429, 500, 502, 503, 504].includes(status)) return true;
+    const msg = String(error?.message || '').toLowerCase();
+    return /rate limit|econnreset|econnrefused|socket hang up|fetch failed|overloaded|temporarily unavailable|service unavailable/.test(msg);
+};
+
+const runStagehandWithRetry = async (fn, retries = 1, delayMs = 1000) => {
+    let lastError;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+            return await fn();
+        } catch (error) {
+            lastError = error;
+            if (attempt === retries || !isTransientStagehandError(error)) throw error;
+            console.warn(`Transient Stagehand error, retrying (attempt ${attempt + 1}/${retries}):`, error.message);
+            await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
+    }
+    throw lastError;
+};
+
 const runStagehandSession = async (req, res) => {
     const { sessionId } = req.params;
     const {
         message,
-        model = process.env.STAGEHAND_MODEL || 'openai/gpt-4.1-mini',
         mode = 'agent',
         timeoutMs = 120000,
         verbose = 1,
@@ -6252,13 +6302,6 @@ const runStagehandSession = async (req, res) => {
         return res.status(400).json({
             error: 'Invalid mode',
             message: 'mode must be one of: agent, act, observe'
-        });
-    }
-
-    if (typeof model !== 'string' || !model.trim()) {
-        return res.status(400).json({
-            error: 'Invalid model',
-            message: 'model must be a non-empty Stagehand model name string'
         });
     }
 
@@ -6296,15 +6339,15 @@ const runStagehandSession = async (req, res) => {
 
         let result;
         if (mode === 'act') {
-            result = await Promise.race([
+            result = await runStagehandWithRetry(() => Promise.race([
                 stagehand.act(message),
                 new Promise((_, reject) => setTimeout(() => reject(new Error('Stagehand action timed out')), stagehandTimeoutMs))
-            ]);
+            ]));
         } else if (mode === 'observe') {
-            result = await Promise.race([
+            result = await runStagehandWithRetry(() => Promise.race([
                 stagehand.observe(message),
                 new Promise((_, reject) => setTimeout(() => reject(new Error('Stagehand observation timed out')), stagehandTimeoutMs))
-            ]);
+            ]));
         } else {
             if (resetConversation) {
                 session.agentMessages = undefined;
@@ -6319,10 +6362,10 @@ const runStagehandSession = async (req, res) => {
                 agentOptions.messages = session.agentMessages;
             }
 
-            result = await Promise.race([
+            result = await runStagehandWithRetry(() => Promise.race([
                 session.agent.execute(agentOptions),
                 new Promise((_, reject) => setTimeout(() => reject(new Error('Stagehand agent timed out')), stagehandTimeoutMs))
-            ]);
+            ]));
 
             if (result?.messages) {
                 session.agentMessages = result.messages;
