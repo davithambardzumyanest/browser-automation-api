@@ -70,11 +70,45 @@ const BROWSER_ARGS = [
 ];
 
 // Common Chrome user agents (version must match Client Hints below)
-const USER_AGENTS = [
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',
-    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36'
-];
+// The UA/Client-Hints major version below must match whatever Chromium binary
+// Puppeteer actually launches - the TLS ClientHello (JA3/JA4-style
+// fingerprint) reflects the real installed BoringSSL build and can't be
+// spoofed via headers, so a mismatch here is a wire-level-vs-header-level
+// inconsistency invisible to anyone just inspecting headers/JS, but visible
+// to any bot-management system that correlates TLS fingerprint against
+// claimed browser version (which is exactly what Cloudflare's does) -
+// consistent with "sometimes passes, sometimes blocked" instead of a hard
+// block, since it depends on how strictly/recently that correlation is
+// enforced. Was hardcoded to Chrome/145 here while the actually-installed
+// binary is 141 - detect the real version once (cached) instead.
+let cachedChromeVersion = null;
+const detectChromeVersion = () => {
+    if (cachedChromeVersion) return cachedChromeVersion;
+    const FALLBACK = { major: '141', full: '141.0.7390.78' };
+    try {
+        const { execFileSync } = require('child_process');
+        const execPath = puppeteer.executablePath();
+        const out = execFileSync(execPath, ['--version']).toString();
+        const match = out.match(/(\d+)\.(\d+)\.(\d+)\.(\d+)/);
+        cachedChromeVersion = match
+            ? { major: match[1], full: `${match[1]}.${match[2]}.${match[3]}.${match[4]}` }
+            : FALLBACK;
+    } catch (_) {
+        cachedChromeVersion = FALLBACK;
+    }
+    return cachedChromeVersion;
+};
+
+const buildUserAgents = () => {
+    const { full } = detectChromeVersion();
+    return [
+        `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${full} Safari/537.36`,
+        `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${full} Safari/537.36`,
+        `Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${full} Safari/537.36`
+    ];
+};
+
+const USER_AGENTS = buildUserAgents();
 
 // Function to get a random user agent
 const getRandomUserAgent = () => {
@@ -129,7 +163,7 @@ const parseChromeVersionFromUA = (ua = '') => {
     if (majorMatch) {
         return { major: majorMatch[1], full: `${majorMatch[1]}.0.0.0` };
     }
-    return { major: '145', full: '145.0.0.0' };
+    return detectChromeVersion();
 };
 
 const buildChromeClientHints = (userAgent, platformProfile) => {
