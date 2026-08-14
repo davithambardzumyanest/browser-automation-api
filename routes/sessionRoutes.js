@@ -16,6 +16,7 @@ router.post('/:sessionId/screenshot', sessionController.screenshotSession);
 router.post('/:sessionId/execute', sessionController.executeScriptSession);
 router.post('/:sessionId/stagehand', sessionController.runStagehandSession);
 router.post('/:sessionId/click', sessionController.clickSession);
+router.post('/:sessionId/click-xy', sessionController.clickByCoordinates);
 router.post('/:sessionId/check-xpath', sessionController.checkXPath);
 router.post('/:sessionId/type', sessionController.typeSession);
 router.post('/:sessionId/select', sessionController.selectOptionSession);

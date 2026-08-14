@@ -425,6 +425,67 @@ Click an element by CSS selector. This endpoint automatically handles:
 }
 ```
 
+#### 10a. Click by Coordinates (X, Y)
+```
+POST /api/session/:sessionId/click-xy
+```
+
+Click at a raw viewport coordinate instead of a CSS selector. Dispatches
+through Puppeteer's `page.mouse` API (Chrome DevTools Protocol `Input`
+domain), which hit-tests at the compositor level - unlike selector-based
+`/click`, this reaches content inside **cross-origin iframes** that a
+same-origin DOM query can't touch at all, such as a Cloudflare Turnstile
+checkbox rendered from `challenges.cloudflare.com`. Confirmed live: clicking
+the coordinates of a Turnstile "Verify you are human" checkbox correctly
+triggered its verification flow (visible state change to "Verifying...",
+with a fresh Ray ID), which `/click` cannot reach at all since the widget
+isn't a same-origin, selector-addressable element.
+
+Includes the same human-like mouse-move-before-click behavior as `/click`
+(the cursor moves to the target over several steps with a randomized delay
+before the click itself, rather than teleporting straight there).
+
+**Request Body:**
+```json
+{
+  "x": 532,
+  "y": 337
+}
+```
+
+**Parameters:**
+- `x` (number, required) - Viewport X coordinate to click
+- `y` (number, required) - Viewport Y coordinate to click
+- `button` (string, optional, default: `"left"`) - One of `"left"`, `"right"`, `"middle"`
+- `clickCount` (number, optional, default: 1) - Number of clicks (e.g. `2` for a double-click)
+- `waitForNavigation` (boolean, optional, default: false) - Wait for page navigation to complete after the click
+- `navigationTimeout` (number, optional, default: 10000) - Maximum time to wait for navigation, in milliseconds
+
+**Response:**
+```json
+{
+  "success": true,
+  "sessionId": "550e8400-e29b-41d4-a716-446655440000",
+  "clicked": true,
+  "x": 532,
+  "y": 337,
+  "navigated": false,
+  "url": "https://example.com/",
+  "title": "Example Domain"
+}
+```
+
+**Finding coordinates:** use `/screenshot` to see the current page visually,
+or `/execute` with `element.getBoundingClientRect()` to compute exact
+coordinates for a specific element - useful when the target is same-origin
+and you just want precise coordinates instead of relying on selector
+matching:
+```json
+{
+  "script": "const el = document.querySelector('a'); const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 };"
+}
+```
+
 #### 10. Type Text in Input Field
 ```
 POST /api/session/:sessionId/type

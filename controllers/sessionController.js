@@ -3414,6 +3414,108 @@ await new Promise(resolve => setTimeout(resolve, 500)); // Wait for scroll to co
     }
 };
 
+// Click at a raw viewport coordinate (page.mouse) instead of a CSS selector.
+// Dispatches through CDP's Input domain, which hit-tests at the compositor
+// level - unlike selector-based clicking, this reaches content inside
+// cross-origin iframes (e.g. a Cloudflare Turnstile checkbox) that a
+// same-origin DOM query can't touch at all.
+const clickByCoordinates = async (req, res) => {
+    const { sessionId } = req.params;
+    const {
+        x,
+        y,
+        waitForNavigation = false,
+        navigationTimeout = 10000,
+        clickCount = 1,
+        button = 'left'
+    } = req.body;
+
+    if (typeof x !== 'number' || typeof y !== 'number' || !Number.isFinite(x) || !Number.isFinite(y)) {
+        return res.status(400).json({ error: 'x and y are required and must be finite numbers' });
+    }
+
+    if (!['left', 'right', 'middle'].includes(button)) {
+        return res.status(400).json({ error: "button must be one of: 'left', 'right', 'middle'" });
+    }
+
+    if (!sessions.has(sessionId)) {
+        return res.status(404).json({
+            error: 'Session not found',
+            message: `Session ${sessionId} does not exist or has expired`
+        });
+    }
+
+    const session = sessions.get(sessionId);
+    session.lastActivity = Date.now();
+
+    try {
+        const page = await getFirstTab(session);
+        session.page = page;
+
+        const originalUrl = page.url();
+
+        // Move first, like clickSession's hover step, rather than teleporting
+        // the cursor straight to the click - a real user's pointer is never
+        // already sitting exactly on the target the instant before a click.
+        await page.mouse.move(x, y, { steps: 10 + Math.floor(Math.random() * 10) });
+        await new Promise(resolve => setTimeout(resolve, randomDelay(100, 250)));
+
+        const navigationPromise = waitForNavigation
+            ? page.waitForNavigation({
+                waitUntil: ['domcontentloaded', 'networkidle0'],
+                timeout: navigationTimeout
+            }).catch(e => console.log('Navigation timeout/error:', e.message))
+            : Promise.resolve();
+
+        await page.mouse.click(x, y, {
+            button,
+            clickCount,
+            delay: randomDelay(60, 150)
+        });
+
+        await Promise.race([
+            navigationPromise,
+            new Promise(resolve => setTimeout(resolve, navigationTimeout))
+        ]);
+
+        const activePage = await getFirstTab(session);
+        session.page = activePage;
+        session.lastActivity = Date.now();
+
+        const finalUrl = activePage.url();
+        const pageTitle = await activePage.title();
+
+        return res.json({
+            success: true,
+            sessionId,
+            clicked: true,
+            x,
+            y,
+            navigated: finalUrl !== originalUrl,
+            url: finalUrl,
+            title: pageTitle
+        });
+    } catch (error) {
+        console.error('Error in clickByCoordinates:', error);
+
+        try {
+            if (sessions.has(sessionId)) {
+                const cleanupSession = sessions.get(sessionId);
+                await closeExtraTabs(cleanupSession);
+                cleanupSession.page = await getFirstTab(cleanupSession);
+            }
+        } catch (cleanupError) {
+            console.error('Error during cleanup after coordinate click error:', cleanupError);
+        }
+
+        res.status(500).json({
+            error: 'Failed to perform click action',
+            message: error.message,
+            details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        });
+    }
+};
+
 // Type text
 const typeSession = async (req, res) => {
     const { sessionId } = req.params;
@@ -6410,6 +6512,7 @@ module.exports = {
     screenshotSession,
     executeScriptSession,
     clickSession,
+    clickByCoordinates,
     typeSession,
     selectOptionSession,
     getContentSession,
