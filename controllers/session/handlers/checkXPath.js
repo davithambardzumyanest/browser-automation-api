@@ -24,16 +24,23 @@ const checkXPath = async (req, res) => {
 
     try {
         const session = sessions.get(sessionId);
-        const page = await getFirstTab(session);
+        // Read-only DOM query: resolve the tab without bringing it to the
+        // front. Focusing is a CDP round trip that buys nothing here, and on
+        // a session launched with slowMo every round trip is padded by the
+        // slowMo value - it was doubling this endpoint's latency.
+        const page = await getFirstTab(session, { focus: false });
         session.page = page;
+        session.lastActivity = Date.now();
 
-        // Check if XPath exists
+        // Check if XPath exists. Evaluated in the page in one round trip;
+        // XPathResult.ANY_UNORDERED_NODE_TYPE lets Blink stop at the first
+        // match instead of materializing the whole result set.
         const exists = await page.evaluate((xpath) => {
             const result = document.evaluate(
                 xpath,
                 document,
                 null,
-                XPathResult.FIRST_ORDERED_NODE_TYPE,
+                XPathResult.ANY_UNORDERED_NODE_TYPE,
                 null
             );
             return result.singleNodeValue !== null;

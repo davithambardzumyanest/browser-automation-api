@@ -24,6 +24,7 @@ const { validateGoogle } = require('./handlers/validateGoogle');
 const { fillInput } = require('./handlers/fillInput');
 const { fillImageInput } = require('./handlers/fillImageInput');
 const { checkXPath } = require('./handlers/checkXPath');
+const { clickXPath } = require('./handlers/clickXPath');
 const { configure2CaptchaEndpoint } = require('./handlers/configure2CaptchaEndpoint');
 const { validate2CaptchaEndpoint } = require('./handlers/validate2CaptchaEndpoint');
 const { diagnose2CaptchaEndpoint } = require('./handlers/diagnose2CaptchaEndpoint');
@@ -51,6 +52,7 @@ module.exports = {
     fillInput,
     fillImageInput,
     checkXPath,
+    clickXPath,
     configure2CaptchaEndpoint,
     validate2CaptchaEndpoint,
     diagnose2CaptchaEndpoint,

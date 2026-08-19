@@ -1123,6 +1123,104 @@ No request body required.
 
 ---
 
+## 24) Click by XPath
+
+**POST** `/:sessionId/click-xpath`
+
+Clicks the element matching an XPath. Built for low latency: one query round trip in
+the common case, and no wait on navigation unless you ask for it. Use this instead of
+`/click` when you have an XPath and want the call to return as soon as the click lands.
+
+### Request body
+
+| Field | Type | Default | Meaning |
+| --- | --- | --- | --- |
+| `xpath` | string | *(required)* | XPath of the element to click |
+| `index` | number | first visible match | Which match to click when the XPath matches several |
+| `timeout` | number | `3000` | Max ms to wait for the element to appear (`0` = don't wait) |
+| `waitForNavigation` | boolean | `false` | Wait for a navigation triggered by the click |
+| `navigationTimeout` | number | `10000` | Max ms to wait when `waitForNavigation` is set |
+| `searchFrames` | boolean | `true` | Also look inside iframes |
+| `domFallback` | boolean | `true` | Use `element.click()` when a real mouse click isn't possible |
+| `clickDelay` | number | random 20-80 | Mousedown→mouseup hold, in ms |
+
+### Request body (example)
+
+```json
+{
+  "xpath": "//button[contains(., 'Submit')]",
+  "waitForNavigation": true
+}
+```
+
+### Success response
+
+```json
+{
+  "success": true,
+  "sessionId": "550e8400-e29b-41d4-a716-446655440000",
+  "xpath": "//button[contains(., 'Submit')]",
+  "clicked": true,
+  "method": "mouse",
+  "matches": 1,
+  "index": 0,
+  "visible": true,
+  "unobstructed": true,
+  "navigated": true,
+  "url": "https://example.com/thanks"
+}
+```
+
+- `method` - `"mouse"` for a real dispatched mouse click, `"dom"` when the element was
+  hidden or covered and the click had to be dispatched in-page instead.
+- `unobstructed` - whether the element was the topmost node at its own center. When this
+  is `false` a mouse click would have been swallowed by whatever is on top, so the
+  endpoint dispatches the click on the element directly.
+- `matches` / `index` - how many nodes the XPath matched, and which one was clicked.
+
+### Element not found (404)
+
+```json
+{
+  "error": "Element not found",
+  "message": "No element matched XPath: //button[@id='ghost']",
+  "xpath": "//button[@id='ghost']",
+  "matches": 0,
+  "sessionId": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+
+### Not clickable, with `domFallback: false` (409)
+
+```json
+{
+  "error": "Element not clickable",
+  "message": "Element is covered by another element",
+  "xpath": "//button[@id='covered']",
+  "matches": 1,
+  "index": 0,
+  "sessionId": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+
+### Validation errors (400)
+
+```json
+{
+  "error": "XPath is required"
+}
+```
+
+```json
+{
+  "error": "Invalid XPath",
+  "message": "SyntaxError: Failed to execute 'evaluate' on 'Document': The string '//[[' is not a valid XPath expression.",
+  "xpath": "//[["
+}
+```
+
+---
+
 ## Quick cURL workflow
 
 ```bash
