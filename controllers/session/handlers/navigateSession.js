@@ -1,5 +1,7 @@
 const { sessions } = require('../state');
 const { setupPageRealism } = require('../helpers/browserFingerprint');
+const { attachDialogGuard } = require('../helpers/dialogs');
+const { applyProxyAuth } = require('../helpers/proxyAuth');
 
 const navigateSession = async (req, res) => {
     const { sessionId } = req.params;
@@ -150,6 +152,24 @@ const navigateSession = async (req, res) => {
         // generic Sec-CH-UA brands). setupPageRealism() is idempotent enough
         // to call again here (registerBrowserRealism specifically guards
         // against piling up duplicate evaluateOnNewDocument scripts).
+        // The page resolved above may be a different object than the one
+        // guarded at session creation (a popup, or a tab that replaced it), and
+        // an unguarded dialog freezes every later action on it. Idempotent, so
+        // re-guarding the same page is free.
+        if (session.blockDialogs !== false) {
+            attachDialogGuard(targetPage, {
+                action: session.dialogAction || 'dismiss',
+                stats: session.dialogStats
+            });
+        }
+
+        // Same per-page story as the dialog guard: credentials are registered
+        // on a Page, so a page resolved later needs its own registration
+        // rather than relying on Chrome's credential cache.
+        if (session.proxyCredentials) {
+            await applyProxyAuth(targetPage, session.proxyCredentials);
+        }
+
         if (session.browserProfile && session.requestHeaders) {
             try {
                 await setupPageRealism(targetPage, session.browserProfile, session.requestHeaders);

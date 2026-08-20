@@ -19,6 +19,9 @@ const {
     sanitizeGeolocation
 } = require('../helpers/browserFingerprint');
 const { getRandomDeviceProfile } = require('../helpers/deviceProfiles');
+const { attachDialogGuard } = require('../helpers/dialogs');
+const { getProxyCredentials, stripProxyCredentials, applyProxyAuth } = require('../helpers/proxyAuth');
+const { installProtocolGuard, DEFAULT_BLOCKED_SCHEMES } = require('./dismissProtocolDialog');
 const { detectProxyGeo } = require('../helpers/geoip');
 
 /**
@@ -66,6 +69,22 @@ const createSession = async (req, res) => {
         grantGeolocationOnNavigation = true,
         deviceScaleFactor = 1,
         persistSession = false,
+        // Javascript dialogs freeze the renderer until something closes them,
+        // so every page gets a guard by default - see helpers/dialogs.js.
+        // blockDialogs:false restores the raw behavior (a dialog then blocks
+        // every subsequent action on that page).
+        blockDialogs = true,
+        // What confirm/prompt dialogs should answer. alert and beforeunload
+        // are always accepted regardless.
+        dialogAction = 'dismiss',
+        // Chrome's native "Open <app>?" external-protocol dialog (intent://,
+        // android-app://, market:// ...). Off by default, unlike blockDialogs:
+        // this dialog does NOT freeze the renderer - CDP input bypasses browser
+        // UI entirely, so a run keeps working with one on screen - and the guard
+        // patches window.open/Location.assign, which is a fingerprinting surface
+        // not worth adding to every session. Turn it on for headful runs against
+        // sites that push a mobile app (Google Maps on an Android UA).
+        blockExternalProtocols = false,
     } = body;
 
     let locale = body.locale ?? 'en-US';
@@ -183,15 +202,19 @@ const createSession = async (req, res) => {
             }
         }
 
-        // Add proxy configuration if specified
+        // Add proxy configuration if specified. Credentials never belong in
+        // --proxy-server (Chrome ignores them there, and the proxy then answers
+        // 407 for every request); they are registered per page with
+        // page.authenticate() instead - see helpers/proxyAuth.js.
         if (proxy) {
             if (typeof proxy === 'string') {
-                // Simple proxy string: "http://host:port"
-                launchOptions.args.push(`--proxy-server=${proxy}`);
+                // Simple proxy string: "http://host:port", optionally
+                // "http://user:pass@host:port".
+                launchOptions.args.push(`--proxy-server=${stripProxyCredentials(proxy)}`);
             } else if (typeof proxy === 'object') {
                 // Proxy object with server and optional auth
                 if (proxy.server) {
-                    launchOptions.args.push(`--proxy-server=${proxy.server}`);
+                    launchOptions.args.push(`--proxy-server=${stripProxyCredentials(proxy.server)}`);
                 }
             }
         }
@@ -283,7 +306,18 @@ const createSession = async (req, res) => {
         launchOptions.args.push(
             '--disable-blink-features=AutomationControlled',
             '--disable-software-rasterizer',
-            '--disable-features=IsolateOrigins,site-per-process',
+            // Keep this as the single --disable-features list. Puppeteer
+            // merges every --disable-features= arg it is given into one flag
+            // (ChromeLauncher.defaultArgs -> getFeatures), so a second push
+            // would survive, but raw Chrome keeps only the last occurrence -
+            // one list stays correct either way.
+            // ExternalProtocolDialog: requested for google.com/maps, which
+            // hands off to external protocol handlers (maps:/intent:) and can
+            // raise a native "Open in another app?" modal. NOTE: this is not a
+            // registered Chrome feature name (141 only ships
+            // ExternalProtocolDialogShowAlwaysOpenCheckbox) and unknown names
+            // are silently ignored, so it is inert - see docs/directories.
+            '--disable-features=IsolateOrigins,site-per-process,ExternalProtocolDialog',
             `--window-size=${viewportWidth},${viewportHeight}`,
         );
 
@@ -352,6 +386,10 @@ const createSession = async (req, res) => {
         // codebase ever generates. Reuse Chrome's own initial tab instead of
         // adding a second one, so there's only ever one tab and no ambiguity
         // about which one is "the" tab.
+        // Works for { username, password } and for credentials embedded in a
+        // proxy URL string, which previously authenticated nothing at all.
+        const proxyCredentials = getProxyCredentials(proxy);
+
         const existingPages = await browser.pages();
         const page = existingPages[0] || await browser.newPage();
         for (const extraPage of existingPages.slice(1)) {
@@ -365,6 +403,23 @@ const createSession = async (req, res) => {
         // real browser sends "none") is an easy, IP-independent bot signal.
         // Let Chrome's own network stack set them; only locale is forced.
         await setupPageRealism(page, browserProfile, headers);
+
+        // Counters kept on the session so a caller can tell after the fact
+        // that a page popped a dialog and what was done with it.
+        const dialogStats = { handled: 0, last: null };
+        if (blockDialogs) {
+            attachDialogGuard(page, { action: dialogAction, stats: dialogStats });
+        }
+
+        // Register credentials before anything can navigate. The later proxy
+        // block re-applies them (idempotent) and still runs its connectivity
+        // check; doing it here as well means no request can race the auth
+        // registration.
+        await applyProxyAuth(page, proxyCredentials);
+
+        if (blockExternalProtocols) {
+            await installProtocolGuard(page, DEFAULT_BLOCKED_SCHEMES);
+        }
 
         // Relay console logs from the page to Node (helps surface evaluateOnNewDocument logs)
         const attachConsoleRelay = (p) => {
@@ -387,6 +442,16 @@ const createSession = async (req, res) => {
                 const newPage = await target.page();
                 if (newPage) {
                     attachConsoleRelay(newPage);
+                    // Popups and click-opened tabs pop dialogs too, and each
+                    // page needs its own listener.
+                    if (blockDialogs) {
+                        attachDialogGuard(newPage, { action: dialogAction, stats: dialogStats });
+                    }
+                    // page.authenticate() is per page, not browser-wide. Chrome
+                    // usually caches proxy credentials after the first success,
+                    // but a popup that issues its first request before that (or
+                    // after a credential change) would otherwise hit a 407.
+                    await applyProxyAuth(newPage, proxyCredentials);
                     await setupPageRealism(newPage, browserProfile, headers);
                 }
             } catch (e) {
@@ -596,30 +661,22 @@ const createSession = async (req, res) => {
         }
 
         // Set proxy authentication if provided
-        if (proxy && typeof proxy === 'object' && proxy.username && proxy.password) {
+        if (proxyCredentials) {
             try {
-                // First try to authenticate using page.authenticate
-                await page.authenticate({
-                    username: proxy.username,
-                    password: proxy.password
-                });
+                // Already registered above; idempotent, and kept here so the
+                // connectivity check below still reports on the same block.
+                await applyProxyAuth(page, proxyCredentials);
 
                 console.log('Proxy authentication set successfully');
 
-                // Set up a handler for authentication dialogs
-                page.on('dialog', async dialog => {
-                    console.log('Authentication dialog detected, attempting to authenticate...');
-                    try {
-                        await dialog.authenticate({
-                            username: proxy.username,
-                            password: proxy.password
-                        });
-                        console.log('Dialog authentication successful');
-                    } catch (authError) {
-                        console.error('Dialog authentication failed:', authError.message);
-                        await dialog.dismiss();
-                    }
-                });
+                // Proxy auth is handled by page.authenticate() above. There is
+                // no dialog to catch here: Puppeteer's Dialog only ever has
+                // type alert/confirm/prompt/beforeunload (validateDialogType in
+                // puppeteer-core/lib/cjs/puppeteer/common/util.js) and exposes
+                // no authenticate() method, so the old 'dialog' listener here
+                // could only ever throw and fall back to dismissing. Dismissing
+                // is now the dialog guard's job, for every session rather than
+                // only the ones that happen to use an authenticated proxy.
 
                 // Test the proxy connection with a simple navigation
                 try {
@@ -656,6 +713,12 @@ const createSession = async (req, res) => {
             // on setupPageRealism for why that's necessary.
             browserProfile,
             requestHeaders: finalHeaders,
+            // Same reason: a page resolved later needs the dialog guard too,
+            // and these carry the session's answer for what to do with one.
+            blockDialogs,
+            dialogAction,
+            dialogStats,
+            proxyCredentials,
             config: {
                 headless,
                 width,
@@ -673,6 +736,8 @@ const createSession = async (req, res) => {
                 grantGeolocationOnNavigation: Boolean(grantGeolocationOnNavigation),
                 timezone: resolvedTimezone,
                 deviceScaleFactor,
+                blockDialogs,
+                dialogAction,
                 persistStorage,
                 realismProfile: {
                     locale,

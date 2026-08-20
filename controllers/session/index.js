@@ -31,6 +31,7 @@ const { diagnose2CaptchaEndpoint } = require('./handlers/diagnose2CaptchaEndpoin
 const { solveRecaptchaEndpoint } = require('./handlers/solveRecaptchaEndpoint');
 const { refreshSession } = require('./handlers/refreshSession');
 const { runStagehandSession } = require('./handlers/runStagehandSession');
+const { dismissProtocolDialog } = require('./handlers/dismissProtocolDialog');
 
 module.exports = {
     createSession,
@@ -58,5 +59,6 @@ module.exports = {
     diagnose2CaptchaEndpoint,
     solveRecaptchaEndpoint,
     refreshSession,
+    dismissProtocolDialog,
     runStagehandSession
 };

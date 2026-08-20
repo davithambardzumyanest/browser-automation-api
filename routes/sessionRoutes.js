@@ -31,5 +31,7 @@ router.post('/:sessionId/configure-2captcha', sessionController.configure2Captch
 router.get('/:sessionId/validate-2captcha', sessionController.validate2CaptchaEndpoint);
 router.get('/:sessionId/diagnose-2captcha', sessionController.diagnose2CaptchaEndpoint);
 router.post('/:sessionId/scroll-to-bottom', sessionController.scrollToBottom);
+// Cancel Chrome's native "Open <app>?" external-protocol dialog (intent:// etc.)
+router.post('/:sessionId/dismiss-protocol-dialog', sessionController.dismissProtocolDialog);
 
 module.exports = router;
