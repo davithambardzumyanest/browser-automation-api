@@ -476,6 +476,72 @@ Get page content (HTML or text).
 
 ### Advanced Features
 
+#### Cancel the "Open <app>?" external-protocol dialog
+```
+POST /api/session/:sessionId/dismiss-protocol-dialog
+```
+
+Clears Chrome's native external-protocol dialog ("Open xdg-open?") and installs a guard
+against future ones. Google Maps raises it when a session uses an **Android user agent**:
+its "Open app" button navigates to `intent://...#Intent;package=com.google.android.apps.maps`,
+and Linux Chrome falls back to `xdg-open`.
+
+**Request Body (all optional):**
+```json
+{
+  "reload": true,
+  "returnTo": true,
+  "install": true,
+  "schemes": ["intent", "android-app", "market"]
+}
+```
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `reload` | `true` | Clear a dialog that is already open. Costs a page reload - see below. |
+| `returnTo` | `true` | After clearing, navigate back to the page you were on. |
+| `install` | `true` | Install the page guard so blocked schemes are dropped going forward. |
+| `schemes` | see handler | Scheme names to block (no trailing colon). |
+
+**Response:**
+```json
+{
+  "success": true,
+  "dismissed": true,
+  "method": "about:blank-bounce",
+  "guardInstalled": true,
+  "previousUrl": "https://www.google.com/maps/@32.83,-116.94,16z",
+  "returnedToPreviousUrl": true,
+  "url": "https://www.google.com/maps/@32.83,-116.94,16z"
+}
+```
+
+**Behaviour worth knowing (all verified against Chrome 141):**
+
+- **The dialog does not block automation.** It is browser UI, and CDP input goes straight
+  to the renderer, so `/click`, `/fill`, `/execute` and `/screenshot` all keep working with
+  one on screen. CDP screenshots do not show it. Cancelling is about keeping a headful
+  window clean and avoiding a stray `xdg-open`, not about unblocking a run.
+- **Its Cancel button is not clickable from CDP.** Dispatching `Escape` via
+  `Input.dispatchKeyEvent` does nothing - the key goes to the page, not to browser UI.
+- **Clearing it needs an ORIGIN CHANGE.** The dialog is keyed to the origin that requested
+  the launch. A same-document navigation does not clear it, and neither does a same-origin
+  one - not even a full reload of the identical URL. That is why `reload: true` bounces
+  through `about:blank` and back, and why it costs a reload: **any unsaved form state on the
+  page is lost.** Use `reload: false` mid-form to install the guard only.
+- **Prevention is best-effort.** The guard covers anchor clicks, `window.open`,
+  `Location.assign/replace`, form submits and injected iframes, with `toString` cloaking so
+  the overrides still read as native. It cannot cover `location.href = "intent://..."`:
+  `window.location` is non-configurable and `href` is an own property of the Location
+  instance, not an overridable prototype accessor. **Google Maps' "Open app" button uses
+  exactly that path, so the guard does not stop it** - the complete fix for Maps is to not
+  send an Android user agent.
+
+The same guard can be installed at session creation with `"blockExternalProtocols": true`.
+It is off by default: the dialog freezes nothing, and patching `window.open` adds a
+fingerprinting surface that is not worth it on every session.
+
+
 #### 12. Fill Input Field with Human-like Typing
 ```
 POST /api/session/:sessionId/fill
