@@ -20,7 +20,8 @@ const {
 } = require('../helpers/browserFingerprint');
 const { getRandomDeviceProfile } = require('../helpers/deviceProfiles');
 const { attachDialogGuard } = require('../helpers/dialogs');
-const { getProxyCredentials, stripProxyCredentials, applyProxyAuth } = require('../helpers/proxyAuth');
+const { getProxyCredentials, stripProxyCredentials, applyProxyAuth, buildAuthenticatedProxyUrl } = require('../helpers/proxyAuth');
+const proxyChain = require('proxy-chain');
 const { installProtocolGuard, DEFAULT_BLOCKED_SCHEMES } = require('./dismissProtocolDialog');
 const { detectProxyGeo } = require('../helpers/geoip');
 
@@ -68,6 +69,16 @@ const createSession = async (req, res) => {
         geolocationOrigins,
         grantGeolocationOnNavigation = true,
         deviceScaleFactor = 1,
+        // Accepted by Puppeteer's own page.setViewport()/defaultViewport, but
+        // previously silently discarded here - every session, regardless of
+        // what was requested, launched and stayed non-mobile/non-touch (see
+        // ANTI_DETECTION_TROUBLESHOOTING.md #16). A mobile UA (iPhone/Android)
+        // combined with isMobile:false emulation is itself an inconsistency:
+        // no CSS media query (pointer/hover) matches a real mobile device,
+        // and (see buildBrowserProfile) navigator.maxTouchPoints stayed 0
+        // even for a touchscreen device's UA.
+        isMobile = false,
+        hasTouch = false,
         persistSession = false,
         // Javascript dialogs freeze the renderer until something closes them,
         // so every page gets a guard by default - see helpers/dialogs.js.
@@ -135,6 +146,8 @@ const createSession = async (req, res) => {
         width,
         height,
         deviceScaleFactor,
+        isMobile,
+        hasTouch,
         geolocation,
         deviceProfile
     });
@@ -158,10 +171,10 @@ const createSession = async (req, res) => {
             defaultViewport: {
                 width,
                 height,
-                deviceScaleFactor: 1,
-                isMobile: false,
-                hasTouch: false,
-                isLandscape: false
+                deviceScaleFactor: deviceScaleFactor || 1,
+                isMobile,
+                hasTouch,
+                isLandscape: width > height
             },
             slowMo: slowMo, // Slow down operations for debugging
             devtools: devtools, // Auto-open DevTools
@@ -203,17 +216,47 @@ const createSession = async (req, res) => {
         }
 
         // Add proxy configuration if specified. Credentials never belong in
-        // --proxy-server (Chrome ignores them there, and the proxy then answers
-        // 407 for every request); they are registered per page with
-        // page.authenticate() instead - see helpers/proxyAuth.js.
+        // --proxy-server (Chrome ignores them there, and the proxy then
+        // answers 407 for every request).
+        //
+        // Authenticated proxies used to be handled by registering
+        // credentials via page.authenticate() (see helpers/proxyAuth.js),
+        // which relies on CDP's Fetch-domain auth-challenge handling.
+        // Confirmed 2026-08-24 (ANTI_DETECTION_TROUBLESHOOTING.md #15
+        // addendum): that mechanism doesn't hold up once a page fires many
+        // concurrent requests at once (any real page - Google search
+        // included) - it reliably hung on a session's first burst of
+        // simultaneous first-time auth challenges, independent of anything
+        // in this codebase's own request handling. A 10-minute low-
+        // concurrency warm-up before the real navigation was found to
+        // reduce how often this hit, but it's a mitigation for a race, not
+        // a fix - repeat testing still hung some of the time.
+        //
+        // Fix: route authenticated proxies through a local anonymizing
+        // proxy (proxy-chain) instead. It injects Proxy-Authorization to
+        // the real upstream proxy itself, so Chrome only ever talks to an
+        // unauthenticated local proxy and never needs CDP-level auth-
+        // challenge handling at all - eliminating the race, not just
+        // reducing it. Closed on session close, see closeSession.js.
+        let anonymizedProxyUrl = null;
         if (proxy) {
-            if (typeof proxy === 'string') {
-                // Simple proxy string: "http://host:port", optionally
-                // "http://user:pass@host:port".
-                launchOptions.args.push(`--proxy-server=${stripProxyCredentials(proxy)}`);
-            } else if (typeof proxy === 'object') {
-                // Proxy object with server and optional auth
-                if (proxy.server) {
+            const authenticatedProxyUrl = buildAuthenticatedProxyUrl(proxy);
+            if (authenticatedProxyUrl) {
+                try {
+                    anonymizedProxyUrl = await proxyChain.anonymizeProxy(authenticatedProxyUrl);
+                    launchOptions.args.push(`--proxy-server=${anonymizedProxyUrl}`);
+                } catch (proxyChainError) {
+                    console.error('Failed to start local anonymizing proxy, falling back to page.authenticate():', proxyChainError.message);
+                    anonymizedProxyUrl = null;
+                }
+            }
+            if (!anonymizedProxyUrl) {
+                // No credentials to anonymize (bare proxy string/object), or
+                // proxy-chain itself failed to start - fall back to the
+                // previous page.authenticate() path.
+                if (typeof proxy === 'string') {
+                    launchOptions.args.push(`--proxy-server=${stripProxyCredentials(proxy)}`);
+                } else if (typeof proxy === 'object' && proxy.server) {
                     launchOptions.args.push(`--proxy-server=${stripProxyCredentials(proxy.server)}`);
                 }
             }
@@ -284,8 +327,8 @@ const createSession = async (req, res) => {
             width: viewportWidth,
             height: viewportHeight,
             deviceScaleFactor: deviceScaleFactor || 1,
-            isMobile: false,
-            hasTouch: false,
+            isMobile,
+            hasTouch,
             isLandscape: viewportWidth > viewportHeight
         };
 
@@ -388,7 +431,10 @@ const createSession = async (req, res) => {
         // about which one is "the" tab.
         // Works for { username, password } and for credentials embedded in a
         // proxy URL string, which previously authenticated nothing at all.
-        const proxyCredentials = getProxyCredentials(proxy);
+        // null when anonymizedProxyUrl is active - the local proxy-chain
+        // proxy needs no per-page auth, so every applyProxyAuth() call
+        // below (each already a no-op on falsy credentials) is skipped.
+        const proxyCredentials = anonymizedProxyUrl ? null : getProxyCredentials(proxy);
 
         const existingPages = await browser.pages();
         const page = existingPages[0] || await browser.newPage();
@@ -588,34 +634,99 @@ const createSession = async (req, res) => {
         // spoofed values, despite setUserAgent() having been called and
         // navigator.userAgent correctly reflecting it pre-navigation). Since
         // interception has to stay on to block images/fonts, re-assert the
-        // identity headers explicitly on every continued request instead.
+        // identity headers explicitly on the continued request instead.
+        //
+        // This override is scoped to the top-level 'document' request only
+        // (confirmed 2026-08-24: passing an explicit `headers` object to
+        // request.continue() on *every* intercepted request - including the
+        // dozens of concurrent subresource requests a real page like
+        // google.com/search fires - reliably hung Chrome's Fetch-domain
+        // handling indefinitely; navigation to simple/low-request-count pages
+        // was unaffected, which is why this only showed up on resource-heavy
+        // real-world pages, not in isolated testing. request.continue() with
+        // no headers argument is the fast/native path and doesn't touch
+        // Sec-Fetch-*/Accept/etc that Chrome computes per-request (see #7/#10
+        // in ANTI_DETECTION_TROUBLESHOOTING.md) - only the document request's
+        // identity actually needed forcing in the first place.
+        //
+        // sec-ch-ua-mobile was hardcoded '?0' here, so a session emulating a
+        // touchscreen phone and sending a "Mobile Safari" UA still told every
+        // server it was a desktop - on the document request specifically, the
+        // one request whose identity this override exists to force. It now
+        // comes from the same client-hints object Chrome itself was given, so
+        // header, navigator.userAgentData and UA string all agree. See
+        // ANTI_DETECTION_TROUBLESHOOTING.md #20.
         const identityHeaders = { 'user-agent': finalUserAgent };
         if (chromeHints) {
             identityHeaders['sec-ch-ua'] = chromeHints.secChUa;
-            identityHeaders['sec-ch-ua-mobile'] = '?0';
+            identityHeaders['sec-ch-ua-mobile'] = chromeHints.secChUaMobile;
             identityHeaders['sec-ch-ua-platform'] = platformProfile.secChUaPlatform;
         }
 
-        // Enable request interception to block images, fonts, and stylesheets
-        await page.setRequestInterception(true);
-        if (!isIntercepting) {
-            isIntercepting = true;
-            page.on('request', async (request) => {
-                try {
-                    if (!allowMedia && ['image', 'font', 'media', 'imageset'].includes(request.resourceType())) {
-                        await request.abort();
-                    } else {
-                        await request.continue({
-                            headers: { ...request.headers(), ...identityHeaders }
-                        });
+        // Request interception is now enabled ONLY when something actually
+        // needs to be blocked (allowMedia:false). It used to be switched on
+        // unconditionally, which meant that on a default session - where the
+        // handler had nothing to abort - its sole remaining effect was to
+        // rewrite the top-level document request's headers, and that rewrite
+        // was actively causing the Google Search captcha.
+        //
+        // Why the rewrite is harmful: request.continue({headers}) makes
+        // Chrome tear down and REBUILD the request from the plain object it
+        // is handed. request.headers() is a lowercased, unordered map, so
+        // everything Chrome knows about its own native header ORDER is lost
+        // in the round trip - and header order is one of the cheapest, most
+        // reliable automation signals there is, because it is a property of
+        // the client's networking stack that content-level spoofing can't
+        // reach. Only the document request was ever rewritten, so only
+        // top-level navigations carried the anomaly.
+        //
+        // Confirmed 2026-08-24 with the in-page fetch() control this file's
+        // troubleshooting doc prescribes: on ONE session, on a clean
+        // non-proxy IP where plain curl got HTTP 200, a top-level navigation
+        // to google.com/search landed on /sorry/index while fetch() to the
+        // exact same URL from that same page returned a real 92KB SERP, 200,
+        // no captcha. Same browser, same IP, same cookies, same TLS - the
+        // only difference between the two paths was this rewrite, which
+        // applies to the navigation and not to fetch(). See
+        // ANTI_DETECTION_TROUBLESHOOTING.md #21.
+        //
+        // The UA/Client-Hints identity that the rewrite existed to protect
+        // (#2) is preserved without it: with no Fetch-domain interception
+        // active, page.setUserAgent()'s Network.setUserAgentOverride applies
+        // natively to every request, header order included. The override only
+        // fails to stick when interception IS on, which is exactly the case
+        // we now avoid by default.
+        const needsInterception = !allowMedia;
+        if (needsInterception) {
+            await page.setRequestInterception(true);
+            if (!isIntercepting) {
+                isIntercepting = true;
+                page.on('request', async (request) => {
+                    try {
+                        if (['image', 'font', 'media', 'imageset'].includes(request.resourceType())) {
+                            await request.abort();
+                        } else if (request.resourceType() === 'document') {
+                            // Interception is already active here, so the
+                            // native UA override does NOT survive (#2) and
+                            // the explicit re-assert is still required -
+                            // accepting the header-order cost above as the
+                            // price of blocking media. Sessions that care
+                            // about Google Search should stay on the default
+                            // allowMedia:true path.
+                            await request.continue({
+                                headers: { ...request.headers(), ...identityHeaders }
+                            });
+                        } else {
+                            await request.continue();
+                        }
+                    } catch (error) {
+                        // Ignore errors from aborted requests
+                        if (!error.message.includes('Request is already handled')) {
+                            console.error('Request interception error:', error);
+                        }
                     }
-                } catch (error) {
-                    // Ignore errors from aborted requests
-                    if (!error.message.includes('Request is already handled')) {
-                        console.error('Request interception error:', error);
-                    }
-                }
-            });
+                });
+            }
         }
         const stagehand = new Stagehand({
             env: 'LOCAL',
@@ -660,14 +771,18 @@ const createSession = async (req, res) => {
             page.setDefaultTimeout(60000);
         }
 
-        // Set proxy authentication if provided
-        if (proxyCredentials) {
+        // Set proxy authentication if provided (page.authenticate() path
+        // only - anonymizedProxyUrl sessions need no per-page auth, but
+        // still get the connectivity check below since `proxy` is set).
+        if (proxy) {
             try {
-                // Already registered above; idempotent, and kept here so the
-                // connectivity check below still reports on the same block.
-                await applyProxyAuth(page, proxyCredentials);
-
-                console.log('Proxy authentication set successfully');
+                if (proxyCredentials) {
+                    // Already registered above; idempotent, and kept here so
+                    // the connectivity check below still reports on the same
+                    // block.
+                    await applyProxyAuth(page, proxyCredentials);
+                    console.log('Proxy authentication set successfully');
+                }
 
                 // Proxy auth is handled by page.authenticate() above. There is
                 // no dialog to catch here: Puppeteer's Dialog only ever has
@@ -719,6 +834,11 @@ const createSession = async (req, res) => {
             dialogAction,
             dialogStats,
             proxyCredentials,
+            // Local proxy-chain server forwarding to the real upstream
+            // proxy - closed in closeSession.js. null when no proxy was
+            // configured, or the caller's proxy had no credentials to
+            // anonymize (nothing to tear down in either case).
+            anonymizedProxyUrl,
             config: {
                 headless,
                 width,
@@ -778,6 +898,8 @@ const createSession = async (req, res) => {
                 headless,
                 width,
                 height,
+                isMobile,
+                hasTouch,
                 userAgent: finalUserAgent,
                 locale,
                 timezone: resolvedTimezone,

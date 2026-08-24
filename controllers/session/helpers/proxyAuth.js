@@ -69,6 +69,32 @@ const stripProxyCredentials = (proxyUrl) => {
 };
 
 /**
+ * Build a single "http://user:pass@host:port" URL from whatever shape the
+ * caller's `proxy` option came in - the input format proxy-chain's
+ * anonymizeProxy() needs (it parses credentials back out of this string
+ * itself; --proxy-server can never carry them, see the module comment).
+ *
+ * @returns {string|null} null if there are no credentials to embed (a bare
+ *   proxy string/object with no username+password needs no anonymizing).
+ */
+const buildAuthenticatedProxyUrl = (proxy) => {
+    const credentials = getProxyCredentials(proxy);
+    if (!credentials) return null;
+
+    const server = typeof proxy === 'string' ? proxy : proxy.server;
+    if (!server) return null;
+
+    try {
+        const parsed = new URL(server);
+        parsed.username = encodeURIComponent(credentials.username);
+        parsed.password = encodeURIComponent(credentials.password);
+        return parsed.toString().replace(/\/$/, '');
+    } catch (_) {
+        return null;
+    }
+};
+
+/**
  * Register proxy credentials on a page. Idempotent per page.
  *
  * @param {Object} page - Puppeteer page
@@ -89,4 +115,4 @@ const applyProxyAuth = async (page, credentials) => {
     }
 };
 
-module.exports = { getProxyCredentials, stripProxyCredentials, applyProxyAuth };
+module.exports = { getProxyCredentials, stripProxyCredentials, applyProxyAuth, buildAuthenticatedProxyUrl };

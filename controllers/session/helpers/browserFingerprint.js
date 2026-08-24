@@ -22,7 +22,20 @@ const BROWSER_ARGS = [
     // requesting a custom width/height got a real on-screen window that
     // didn't match it, while the spoofed viewport/screen/window.outerWidth
     // all still claimed the requested size.
-    '--disable-notifications',
+    // Deliberately no --disable-notifications: that flag doesn't just
+    // auto-deny permission prompts, it removes the `window.Notification`
+    // global entirely - a real, unmodified Chrome always has it defined
+    // (even for a user who's denied every notification prompt they've
+    // ever seen). Confirmed 2026-08-24 via bot.sannysoft.com's
+    // "Permissions (New)" check: `typeof Notification === 'undefined'`
+    // with this flag present, on a host with a real, running desktop
+    // notification service (org.freedesktop.Notifications on D-Bus) that
+    // Chrome would otherwise have used. Permission behavior is already
+    // fully controlled at the JS layer instead - see
+    // `navigator.permissions.query`'s 'notifications' handling and
+    // `Notification.requestPermission` below, plus stealth's own
+    // `Notification.permission` evasion - so the launch flag was
+    // redundant on top of being the thing creating the detectable gap.
     '--disable-popup-blocking',
     '--disable-translate',
     '--disable-extensions',
@@ -70,14 +83,88 @@ const getRandomUserAgent = () => {
     return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
 };
 
+// Android's UA string contains the literal "Linux" ("Mozilla/5.0 (Linux;
+// Android 14; Pixel 8) ...") and iOS's contains "Mac OS X" ("... (iPhone; CPU
+// iPhone OS 16_3 like Mac OS X) ..."), so the mobile checks MUST come before
+// the desktop ones. Before they existed, every mobile session fell through to
+// the desktop Linux/macOS branch and inherited a desktop identity end to end:
+// an Android-UA session advertised sec-ch-ua-platform: "Linux" on the wire,
+// navigator.platform "Linux x86_64", and a desktop Intel/Mesa WebGL renderer,
+// while simultaneously emulating a 412x915 touchscreen at DPR 2.625 and
+// sending a "Mobile Safari" UA. See ANTI_DETECTION_TROUBLESHOOTING.md #20.
+//
+// `mobile` here is the single source of truth for everything downstream that
+// has to agree about it: the Sec-CH-UA-Mobile request header, the
+// userAgentMetadata handed to page.setUserAgent() (which is what Chrome
+// derives its own client hints from), and navigator.userAgentData's `mobile`
+// field. All three used to be independently hardcoded to the desktop value.
+const parseAndroidModel = (ua) => {
+    // "(Linux; Android 14; Pixel 8)" -> "Pixel 8"
+    // "(Linux; Android 13; SM-S918B Build/TP1A.220624.014)" -> "SM-S918B"
+    const match = String(ua).match(/Android\s+[\d.]+;\s*([^;)]+?)(?:\s+Build\/[^)]*)?\)/);
+    return match ? match[1].trim() : '';
+};
+
+const parseAndroidVersion = (ua) => {
+    const match = String(ua).match(/Android\s+([\d.]+)/);
+    if (!match) return '14.0.0';
+    // Sec-CH-UA-Platform-Version is always major.minor.patch; Android UAs
+    // usually carry only the major ("Android 14").
+    const parts = match[1].split('.');
+    while (parts.length < 3) parts.push('0');
+    return parts.slice(0, 3).join('.');
+};
+
+const parseIosVersion = (ua) => {
+    const match = String(ua).match(/OS\s+(\d+)[._](\d+)(?:[._](\d+))?\s+like Mac OS X/);
+    if (!match) return '16.0.0';
+    return `${match[1]}.${match[2]}.${match[3] || '0'}`;
+};
+
 const detectPlatformFromUA = (ua = '') => {
     const input = String(ua);
+    if (/Android/i.test(input)) {
+        return {
+            secChUaPlatform: '"Android"',
+            secChUaPlatformVersion: `"${parseAndroidVersion(input)}"`,
+            // Real Android Chrome reports "Linux armv8l" here even on 64-bit
+            // ARM devices - it does not expose aarch64/x86_64 to the web.
+            navigatorPlatform: 'Linux armv8l',
+            osCpu: 'Linux armv8l',
+            mobile: true,
+            model: parseAndroidModel(input)
+        };
+    }
+    if (/iPhone|iPod/.test(input)) {
+        return {
+            secChUaPlatform: '"iOS"',
+            secChUaPlatformVersion: `"${parseIosVersion(input)}"`,
+            navigatorPlatform: 'iPhone',
+            osCpu: 'iPhone',
+            mobile: true,
+            model: 'iPhone'
+        };
+    }
+    if (/iPad/.test(input)) {
+        return {
+            secChUaPlatform: '"iOS"',
+            secChUaPlatformVersion: `"${parseIosVersion(input)}"`,
+            // iPadOS 13+ deliberately reports the desktop Mac value here -
+            // this is real Safari behavior, not a mistake.
+            navigatorPlatform: 'MacIntel',
+            osCpu: 'iPad',
+            mobile: true,
+            model: 'iPad'
+        };
+    }
     if (input.includes('Windows')) {
         return {
             secChUaPlatform: '"Windows"',
             secChUaPlatformVersion: '"15.0.0"',
             navigatorPlatform: 'Win32',
-            osCpu: 'Windows NT 10.0; Win64; x64'
+            osCpu: 'Windows NT 10.0; Win64; x64',
+            mobile: false,
+            model: ''
         };
     }
     if (input.includes('Macintosh') || input.includes('Mac OS X')) {
@@ -85,7 +172,9 @@ const detectPlatformFromUA = (ua = '') => {
             secChUaPlatform: '"macOS"',
             secChUaPlatformVersion: '"14.0.0"',
             navigatorPlatform: 'MacIntel',
-            osCpu: 'Intel Mac OS X 10_15_7'
+            osCpu: 'Intel Mac OS X 10_15_7',
+            mobile: false,
+            model: ''
         };
     }
     if (input.includes('Linux')) {
@@ -93,14 +182,18 @@ const detectPlatformFromUA = (ua = '') => {
             secChUaPlatform: '"Linux"',
             secChUaPlatformVersion: '"6.0.0"',
             navigatorPlatform: 'Linux x86_64',
-            osCpu: 'Linux x86_64'
+            osCpu: 'Linux x86_64',
+            mobile: false,
+            model: ''
         };
     }
     return {
         secChUaPlatform: '"Windows"',
         secChUaPlatformVersion: '"15.0.0"',
         navigatorPlatform: 'Win32',
-        osCpu: 'Windows NT 10.0; Win64; x64'
+        osCpu: 'Windows NT 10.0; Win64; x64',
+        mobile: false,
+        model: ''
     };
 };
 
@@ -138,22 +231,37 @@ const buildChromeClientHints = (userAgent, platformProfile) => {
         { brand: 'Chromium', version: full }
     ];
 
+    // Was hardcoded to the desktop x86/64/non-mobile triple for every
+    // session. Chrome derives the Sec-CH-UA-Mobile header and
+    // navigator.userAgentData from exactly this object, so on a mobile
+    // session it was the direct source of the "Mobile Safari UA + touch
+    // viewport, but sec-ch-ua-mobile: ?0 and userAgentData.mobile === false"
+    // contradiction (see ANTI_DETECTION_TROUBLESHOOTING.md #20). Real Chrome
+    // on Android sends architecture "" and bitness "" (it declines to report
+    // them at all on mobile) and populates `model` with the device name -
+    // reporting "x86"/"64"/"" there is itself a desktop tell.
+    const mobile = Boolean(platformProfile.mobile);
+    const architecture = mobile ? '' : 'x86';
+    const bitness = mobile ? '' : '64';
+
     return {
         major,
         full,
         brands,
         fullVersionList,
+        mobile,
         secChUa: brands.map((b) => `"${b.brand}";v="${b.version}"`).join(', '),
+        secChUaMobile: mobile ? '?1' : '?0',
         secChUaFullVersionList: fullVersionList.map((b) => `"${b.brand}";v="${b.version}"`).join(', '),
         userAgentMetadata: {
             brands,
             fullVersion: full,
             platform: platformName,
             platformVersion,
-            architecture: 'x86',
-            model: '',
-            mobile: false,
-            bitness: '64'
+            architecture,
+            model: platformProfile.model || '',
+            mobile,
+            bitness
         }
     };
 };
@@ -252,11 +360,48 @@ const WEBGL_PROFILES = {
     '"Linux"': {
         vendor: 'Google Inc. (Intel)',
         renderer: 'ANGLE (Intel, Mesa Intel(R) UHD Graphics 630 (CFL GT2), OpenGL 4.6)'
+    },
+    // Android UAs used to fall through detectPlatformFromUA's desktop "Linux"
+    // branch and inherit the Mesa/Intel desktop renderer above - a discrete
+    // desktop GPU on a phone, contradicting the UA, the touch emulation and
+    // the DPR all at once. Chrome on Android renders through ANGLE over
+    // OpenGL ES, so both the backend and the GPU family differ from any
+    // desktop string. Default is the Qualcomm Adreno line (the most common
+    // Android GPU by a wide margin); see getWebglProfile for the per-model
+    // override that keeps Pixel/Tensor devices on ARM Mali instead.
+    '"Android"': {
+        vendor: 'Google Inc. (Qualcomm)',
+        renderer: 'ANGLE (Qualcomm, Adreno (TM) 740, OpenGL ES 3.2)'
+    },
+    // Safari on iOS exposes only these two coarse values through
+    // WEBGL_debug_renderer_info - it does not report a specific GPU model.
+    '"iOS"': {
+        vendor: 'Apple Inc.',
+        renderer: 'Apple GPU'
     }
 };
 
-const getWebglProfile = (platformProfile) =>
-    WEBGL_PROFILES[platformProfile?.secChUaPlatform] || WEBGL_PROFILES['"Windows"'];
+// Google's Tensor SoCs (Pixel 6 and newer) use ARM Mali, not Adreno; every
+// other mainstream Android flagship in this pool is Adreno. Keyed off the
+// model parsed out of the UA so the GPU string can't contradict the device
+// name the same UA advertises.
+const ANDROID_WEBGL_OVERRIDES = [
+    {
+        match: /Pixel\s*([6-9]|1\d)/i,
+        profile: {
+            vendor: 'Google Inc. (ARM)',
+            renderer: 'ANGLE (ARM, Mali-G715, OpenGL ES 3.2)'
+        }
+    }
+];
+
+const getWebglProfile = (platformProfile) => {
+    if (platformProfile?.secChUaPlatform === '"Android"' && platformProfile.model) {
+        const override = ANDROID_WEBGL_OVERRIDES.find((entry) => entry.match.test(platformProfile.model));
+        if (override) return override.profile;
+    }
+    return WEBGL_PROFILES[platformProfile?.secChUaPlatform] || WEBGL_PROFILES['"Windows"'];
+};
 
 const resolveSessionTimezone = (locale, timezone, geolocation) => {
     if (timezone) return timezone;
@@ -295,6 +440,8 @@ const buildBrowserProfile = ({
     width,
     height,
     deviceScaleFactor = 1,
+    isMobile = false,
+    hasTouch = false,
     geolocation,
     // Optional bundle from deviceProfiles.js (webgl/hardwareConcurrency/
     // deviceMemory/screen), consistently matched to the platform - used
@@ -307,7 +454,12 @@ const buildBrowserProfile = ({
     const resolvedTimezone = resolveSessionTimezone(locale, timezone, geolocation);
     const viewportWidth = width || 1920;
     const viewportHeight = height || 1080;
-    const chromeUiHeight = 88;
+    // Desktop Chrome's window is taller than its viewport by roughly the
+    // tab strip + omnibox. On mobile there is no such separate window chrome
+    // in this sense, and outerHeight tracks innerHeight - the flat +88 was
+    // claiming a browser window 88px TALLER THAN THE ENTIRE SCREEN on a
+    // 412x915 phone profile, which is impossible on a real device.
+    const chromeUiHeight = isMobile ? 0 : 88;
 
     // A real screen is never smaller than the browser's own viewport - a
     // 1920x1080 window can't fit on a 1366x768 monitor. Previously screen
@@ -332,13 +484,17 @@ const buildBrowserProfile = ({
         viewport: {
             width: viewportWidth,
             height: viewportHeight,
-            deviceScaleFactor
+            deviceScaleFactor,
+            isMobile,
+            hasTouch
         },
         screen: {
             width: screenWidth,
             height: screenHeight,
             availWidth: screenWidth,
-            availHeight: Math.max(screenHeight - 40, viewportHeight),
+            // The 40px deduction models a desktop taskbar/dock; phones have
+            // no such reserved strip and report availHeight === height.
+            availHeight: isMobile ? screenHeight : Math.max(screenHeight - 40, viewportHeight),
             colorDepth: 24,
             pixelDepth: 24,
             devicePixelRatio: deviceScaleFactor
@@ -353,7 +509,11 @@ const buildBrowserProfile = ({
         hardware: {
             hardwareConcurrency: deviceProfile?.hardwareConcurrency ?? 8,
             deviceMemory: deviceProfile?.deviceMemory ?? 8,
-            maxTouchPoints: 0
+            // Was hardcoded to 0 regardless of hasTouch - a touch-capable
+            // profile (mobile UA + hasTouch:true) reporting zero touch
+            // points is an easy, static (no navigation needed) tell. 5
+            // matches real iOS/Android devices' typical value.
+            maxTouchPoints: hasTouch ? 5 : 0
         },
         permissions: {
             geolocation: geolocation ? 'granted' : 'prompt',
@@ -428,16 +588,64 @@ const registerBrowserRealism = async (page, profile) => {
         // would otherwise expose as real JS source (this was missed when
         // toString cloaking was first added - only the fully-replaced
         // functions further down, like permissions.query, got it).
-        const defineGetter = (obj, prop, getter) => {
+        //
+        // CRITICAL: these must be defined on the INTERFACE PROTOTYPE
+        // (Navigator.prototype / Screen.prototype), never on the `navigator`
+        // or `screen` instance. Every one of these attributes is a WebIDL
+        // accessor that lives on the prototype in a real browser, so a real
+        // Chrome answers `Object.getOwnPropertyNames(navigator)` with an
+        // EMPTY array (verified directly against this project's own Chrome
+        // binary with no patches applied). Defining them on the instance
+        // instead - which is what this code used to do for all twelve
+        // navigator properties and all six screen properties - left an own-
+        // property list that named, in order, precisely the values being
+        // spoofed. That is a single-expression, zero-network, unspoofable-
+        // by-accident tell, and it is the exact bug entry #18 already
+        // identified and fixed for `navigator.webdriver` alone without
+        // noticing that every other override on this page had it too. See
+        // ANTI_DETECTION_TROUBLESHOOTING.md #21.
+        //
+        // The real descriptors are {get, set: undefined, enumerable: true,
+        // configurable: true}; the previous helper produced enumerable:
+        // false, which is itself a mismatch a check can read off the
+        // descriptor. Reuse the original descriptor's `set` and
+        // `enumerable` so the replacement is shaped exactly like what it
+        // replaces - `window`'s own properties, which legitimately ARE own
+        // properties on the global object, keep their real setters this way
+        // instead of silently becoming read-only.
+        const redefineAccessor = (target, prop, getter) => {
             try {
-                Object.defineProperty(obj, prop, {
+                const existing = Object.getOwnPropertyDescriptor(target, prop);
+                Object.defineProperty(target, prop, {
                     get: cloakAsNative(getter, `get ${prop}`),
+                    set: existing && existing.set ? existing.set : undefined,
+                    enumerable: existing ? existing.enumerable : true,
                     configurable: true
                 });
             } catch (_) {}
         };
+        const defineGetter = (obj, prop, getter) => {
+            // Route instance targets to the interface prototype that really
+            // owns the attribute; anything else (window) is defined in place.
+            if (obj === navigator) return redefineAccessor(Navigator.prototype, prop, getter);
+            if (obj === screen) return redefineAccessor(Screen.prototype, prop, getter);
+            return redefineAccessor(obj, prop, getter);
+        };
 
-        defineGetter(navigator, 'webdriver', () => false);
+        // No navigator.webdriver override here - deliberately. Chrome 88+
+        // already reports `false` natively once `--disable-blink-features=
+        // AutomationControlled` is set (which this project already does at
+        // launch), and puppeteer-extra-plugin-stealth's own dedicated
+        // navigator.webdriver evasion (already active, see helpers/
+        // puppeteer.js) confirms exactly this and no-ops for exactly that
+        // reason. Adding a getter here anyway - even one that also returns
+        // `false` - creates an *own property* on the `navigator` instance
+        // that a real, non-automated Chrome never has (native `webdriver`
+        // lives on `Navigator.prototype`, not the instance). Confirmed
+        // 2026-08-24 via bot.sannysoft.com's "WebDriver (New)" check, which
+        // failed with exactly this getter present and passes without it -
+        // the override was actively creating the detectable signal it was
+        // trying to hide.
         defineGetter(navigator, 'language', () => locale);
         // Same ordered list the Accept-Language header is built from (see
         // buildPreferredLanguages) - previously this was a separate hardcoded
@@ -458,22 +666,51 @@ const registerBrowserRealism = async (page, profile) => {
             defineGetter(navigator, 'oscpu', () => platformProfile.osCpu);
         }
 
+        // mobile/architecture/bitness/model used to be hardcoded to the
+        // desktop values right here, independently of (and so free to
+        // contradict) both the UA string and the Sec-CH-UA-Mobile header on
+        // the wire. They all now come from the one userAgentMetadata object
+        // that Chrome itself was handed via page.setUserAgent(), so the JS
+        // view and the wire view cannot diverge. See
+        // ANTI_DETECTION_TROUBLESHOOTING.md #20.
         if ('userAgentData' in navigator && chromeProfile) {
+            const meta = chromeProfile.userAgentMetadata;
             defineGetter(navigator, 'userAgentData', () => ({
                 brands: chromeProfile.brands,
-                mobile: false,
-                platform: platformProfile.secChUaPlatform.replace(/"/g, ''),
+                mobile: meta.mobile,
+                platform: meta.platform,
                 getHighEntropyValues: async () => ({
-                    architecture: 'x86',
-                    bitness: '64',
-                    mobile: false,
-                    model: '',
-                    platform: platformProfile.secChUaPlatform.replace(/"/g, ''),
-                    platformVersion: platformProfile.secChUaPlatformVersion.replace(/"/g, ''),
+                    architecture: meta.architecture,
+                    bitness: meta.bitness,
+                    brands: chromeProfile.brands,
+                    mobile: meta.mobile,
+                    model: meta.model,
+                    platform: meta.platform,
+                    platformVersion: meta.platformVersion,
                     uaFullVersion: chromeProfile.full,
                     fullVersionList: chromeProfile.fullVersionList
                 })
             }));
+        } else if ('userAgentData' in navigator && !chromeProfile) {
+            // Non-Chrome UA (a Safari/iOS string) running on a Chrome binary:
+            // navigator.userAgentData is a Chromium-only API that Safari does
+            // not implement at all. Leaving Chrome's real one in place meant
+            // an "iPhone ... Safari/604.1" session still answered
+            // navigator.userAgentData.brands with "Google Chrome" and
+            // .platform with the host's real OS - a one-line, no-network
+            // contradiction of its own UA. Remove the whole surface so the
+            // session looks like what it claims to be.
+            //
+            // This narrows the gap but does not close it: a Chrome binary
+            // wearing a Safari UA still differs from real Safari in JS engine
+            // features and TLS fingerprint, neither of which is reachable
+            // from here. Prefer an Android *Chrome* UA for mobile sessions.
+            try {
+                delete Navigator.prototype.userAgentData;
+            } catch (_) {}
+            try {
+                if ('userAgentData' in navigator) delete navigator.userAgentData;
+            } catch (_) {}
         }
 
         // navigator.connection intentionally left native (no override): the
@@ -508,16 +745,38 @@ const registerBrowserRealism = async (page, profile) => {
         patchWebGL(window.WebGLRenderingContext);
         patchWebGL(window.WebGL2RenderingContext);
 
+        // PermissionStatus.state only ever has three valid values: 'granted',
+        // 'denied', 'prompt' - 'default' is a Notification.permission value,
+        // never a valid permissions.query() result. `permissions.notifications`
+        // is 'default' (matching the Notification.permission convention, used
+        // as-is below for Notification.requestPermission()), so it needs
+        // translating here specifically - returning state:'default' from
+        // query() is a value no real browser can ever produce, an instant
+        // tell. Confirmed 2026-08-24 via bot.sannysoft.com's "Permissions
+        // (New)" check, which failed showing exactly this invalid value.
+        const toPermissionState = (name, value) =>
+            name === 'notifications' && value === 'default' ? 'prompt' : value;
+        // Assigning to navigator.permissions.query would create an own
+        // property on the Permissions instance, which a real browser never
+        // has (query lives on Permissions.prototype) - the same own-property
+        // tell described above for navigator/screen. Patch the prototype.
         const originalPermissionsQuery = navigator.permissions?.query?.bind(navigator.permissions);
-        if (originalPermissionsQuery) {
-            const patchedQuery = (parameters) => {
+        if (originalPermissionsQuery && typeof Permissions !== 'undefined') {
+            const patchedQuery = function query(parameters) {
                 const name = parameters?.name;
                 if (name && Object.prototype.hasOwnProperty.call(permissions, name)) {
-                    return Promise.resolve({ state: permissions[name], onchange: null });
+                    return Promise.resolve({ state: toPermissionState(name, permissions[name]), onchange: null });
                 }
                 return originalPermissionsQuery(parameters);
             };
-            navigator.permissions.query = cloakAsNative(patchedQuery, 'query');
+            try {
+                Object.defineProperty(Permissions.prototype, 'query', {
+                    value: cloakAsNative(patchedQuery, 'query'),
+                    writable: true,
+                    enumerable: true,
+                    configurable: true
+                });
+            } catch (_) {}
         }
 
         if (typeof Notification !== 'undefined' && Notification.requestPermission) {
@@ -568,8 +827,13 @@ const setupPageRealism = async (page, browserProfile, requestHeaders) => {
         width: browserProfile.viewport.width,
         height: browserProfile.viewport.height,
         deviceScaleFactor: browserProfile.viewport.deviceScaleFactor,
-        isMobile: false,
-        hasTouch: false,
+        // Was hardcoded false here regardless of what createSession.js set
+        // at launch - since this runs again before every navigation (see
+        // comment above setupPageRealism), a mobile session's isMobile/
+        // hasTouch got silently reverted to desktop on the very first
+        // /goto after creation. See ANTI_DETECTION_TROUBLESHOOTING.md #16.
+        isMobile: browserProfile.viewport.isMobile || false,
+        hasTouch: browserProfile.viewport.hasTouch || false,
         isLandscape: browserProfile.viewport.width > browserProfile.viewport.height
     });
 

@@ -149,7 +149,18 @@ async function randomWheelScroll(page) {
 }
 
 async function randomKeyPresses(page) {
-    const keys = ['ArrowDown', 'ArrowUp', 'PageDown', 'PageUp', 'End', 'Enter', 'Enter', 'Enter', 'Enter', 'Enter', 'Enter'];
+    // Navigation keys only - deliberately NO 'Enter'. This is called right
+    // after fillRandomForms() has typed a query into the search box, and
+    // that function goes out of its way NOT to submit (see the comment
+    // there). 'Enter' here used to be 6 of the 11 entries in this pool,
+    // which silently undid that: every warm-up cycle ended up firing real
+    // Google searches, and a 10-minute simulate-actions run would rack up
+    // dozens of them from one exit IP - exactly the pattern that gets the
+    // IP flagged and lands later /goto calls on /sorry/index (see
+    // ANTI_DETECTION_TROUBLESHOOTING.md #19). Scrolling/caret keys give
+    // the same "user is fiddling with the page" signal without submitting
+    // anything.
+    const keys = ['ArrowDown', 'ArrowUp', 'PageDown', 'PageUp', 'End', 'Home'];
     const presses = randomDelay(1, 3);
     for (let i = 0; i < presses; i++) {
         const key = keys[Math.floor(Math.random() * keys.length)];
@@ -468,10 +479,16 @@ async function fillRandomForms(page) {
             // Type the value with human-like behavior
             await humanTypeText(page, input, value);
 
-            // Sometimes press Enter or Tab (30% chance)
+            // Sometimes Tab to the next field (30% chance). Never 'Enter':
+            // this is the generic fallback path that runs when the search-box
+            // branch above didn't match, so on a search page it would submit
+            // the form - firing a real query per warm-up cycle and burning
+            // the exit IP's reputation (same reason 'Enter' was removed from
+            // randomKeyPresses - see the note there). Tab moves focus like a
+            // real user without submitting anything.
             if (Math.random() < 0.3) {
                 await wait(randomDelay(300, 800));
-                await page.keyboard.press(Math.random() > 0.5 ? 'Enter' : 'Tab', {
+                await page.keyboard.press('Tab', {
                     delay: randomDelay(50, 150)
                 });
             }

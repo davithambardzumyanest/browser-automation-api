@@ -1,4 +1,5 @@
 const fs = require('fs');
+const proxyChain = require('proxy-chain');
 const { sessions } = require('../state');
 
 const closeSession = async (sessionId) => {
@@ -10,6 +11,18 @@ const closeSession = async (sessionId) => {
             console.error(`Error closing session ${sessionId}:`, error);
         }
         sessions.delete(sessionId);
+
+        // Local proxy-chain forwarding server started in createSession.js -
+        // leaks a listening port/process if not explicitly closed (unlike
+        // Chrome's own process, it isn't a child of the browser being
+        // closed above).
+        if (session.anonymizedProxyUrl) {
+            try {
+                await proxyChain.closeAnonymizedProxy(session.anonymizedProxyUrl, true);
+            } catch (error) {
+                console.error(`Error closing anonymized proxy for session ${sessionId}:`, error);
+            }
+        }
 
         // Remove the throwaway per-session profile dir created for sessions
         // that didn't request a persistent profileId/userDataDir, so it can't
