@@ -1,20 +1,63 @@
 const { sessions } = require('../state');
 const { getFirstTab, closeExtraTabs } = require('../helpers/tabs');
-const { findFrameWithSelector } = require('../helpers/selectOptionMatching');
+const { resolveHandles, pickHandle, disposeAll, isInvalidSelectorError } = require('../helpers/clickTargets');
+const { armNavigation } = require('../helpers/navigationWatch');
 const { randomDelay } = require('../helpers/timing');
 
-// Click element
+/**
+ * Click the first clickable element matching a CSS selector.
+ *
+ * Built for bounded latency. Every wait in here is one a caller asked for:
+ *
+ * - A selector that never matches costs `timeout` and then 404s. There is no
+ *   retry loop, no per-attempt frame-scan timeout and no sleep between
+ *   attempts - the old handler stacked three 5s frame scans plus two 1s
+ *   sleeps, so "element does not exist" took ~17s to report.
+ * - A click that does not navigate costs `navigationGrace`, not
+ *   `navigationTimeout`. The old handler waited on a promise that could never
+ *   settle (`newTabPromise` was only ever resolved on the allowNewTab path),
+ *   so *every* click fell through to the full navigation timeout.
+ * - Puppeteer's click scrolls the element into view and picks a clickable
+ *   point itself, so there is no separate scroll round trip and no sleep
+ *   waiting for smooth scrolling to finish.
+ *
+ * Worst case is `timeout + navigationTimeout` (default 3s + 5s).
+ *
+ * @param {Object} req - Express request object
+ * @param {string} req.params.sessionId - The session ID
+ * @param {string} req.body.selector - CSS selector of the element to click
+ * @param {number} [req.body.index] - Which match to click (default: first visible)
+ * @param {number} [req.body.timeout=3000] - Max ms to wait for the element to appear
+ * @param {boolean} [req.body.waitForNavigation=true] - Wait for a navigation caused by the click
+ * @param {number} [req.body.navigationTimeout=5000] - Max ms to wait once a navigation started
+ * @param {number} [req.body.navigationGrace=1000] - Max ms to wait for a navigation to start at all
+ * @param {boolean} [req.body.allowNewTab=false] - Follow a click that opens a new tab
+ * @param {boolean} [req.body.searchFrames=true] - Also look inside iframes on a main-frame miss
+ * @param {boolean} [req.body.domFallback=true] - Fall back to element.click() if the mouse click fails
+ * @param {number} [req.body.clickDelay] - Mousedown->mouseup hold in ms (default: random 20-80)
+ * @param {Object} res - Express response object
+ */
 const clickSession = async (req, res) => {
     const { sessionId } = req.params;
     const {
         selector,
+        index,
+        timeout = 3000,
         waitForNavigation = true,
+        navigationTimeout = 5000,
+        navigationGrace = 1000,
         allowNewTab = false,
-        navigationTimeout = 10000
-    } = req.body;
+        searchFrames = true,
+        domFallback = true,
+        clickDelay
+    } = req.body || {};
 
     if (!selector) {
         return res.status(400).json({ error: 'Selector is required' });
+    }
+
+    if (index !== undefined && (!Number.isInteger(index) || index < 0)) {
+        return res.status(400).json({ error: 'index must be a non-negative integer' });
     }
 
     if (!sessions.has(sessionId)) {
@@ -27,243 +70,177 @@ const clickSession = async (req, res) => {
     const session = sessions.get(sessionId);
     session.lastActivity = Date.now();
 
+    let handles = [];
+
     try {
-        // Ensure we're working with the first tab
+        // A click needs the tab focused: the mouse events are dispatched
+        // against the foreground tab's render surface.
         const page = await getFirstTab(session);
         session.page = page;
 
-        // Store the current URL before clicking
         const originalUrl = page.url();
 
-        // Scroll the element into view with smooth scrolling
-        await page.evaluate(sel => {
-            const element = document.querySelector(sel);
-            if (element) {
-                element.scrollIntoView({
-                    behavior: 'smooth',
-                    block: 'center',
-                    inline: 'nearest'
-                });
-            }
-        }, selector);
+        const resolved = await resolveHandles(page, {
+            query: selector,
+            timeout,
+            searchFrames,
+            pierce: true
+        });
+        handles = resolved.handles;
 
-        // Helper function to find a clickable element
-        const findClickableElement = async (selector, maxAttempts = 3) => {
-            let attempts = 0;
-            while (attempts < maxAttempts) {
-                try {
-                    // Locate whichever frame currently has the selector - main page or any
-                    // (possibly nested) iframe - polling as frames attach/navigate, and
-                    // falling back to shadow-piercing lookups for closed/open shadow roots.
-                    const frame = await findFrameWithSelector(page, selector, 5000);
-                    if (!frame) {
-                        throw new Error('No elements found');
-                    }
-
-                    let elements = await frame.$$(selector);
-                    if (elements.length === 0) {
-                        elements = await frame.$$(`pierce/${selector}`).catch(() => []);
-                    }
-
-                    if (elements.length === 0) {
-                        throw new Error('No elements found');
-                    }
-
-                    // Try to find a clickable element
-                    for (const el of elements) {
-                        try {
-                            // Check if element is visible and in viewport
-                            const isVisible = await el.isIntersectingViewport();
-                            if (!isVisible) {
-                                // Scroll element into view if not visible
-                                await el.evaluate(el => el.scrollIntoView({
-                                    behavior: 'smooth',
-                                    block: 'center',
-                                    inline: 'center'
-                                }));
-await new Promise(resolve => setTimeout(resolve, 500)); // Wait for scroll to complete
-                            }
-
-                            // Check if element is clickable
-                            await el.hover().catch(() => { throw new Error('Element not hoverable'); });
-                            return el; // If we got here, element is clickable
-                        } catch (e) {
-                            console.log(`Element not clickable, trying next one: ${e.message}`);
-                            continue;
-                        }
-                    }
-
-                    // If we get here, no elements were clickable
-                    throw new Error('No clickable elements found');
-
-                } catch (e) {
-                    attempts++;
-                    console.log(`Attempt ${attempts}/${maxAttempts} failed:`, e.message);
-                    if (attempts >= maxAttempts) {
-                        // Throw a clean error instead of leaking Puppeteer's raw
-                        // TimeoutError (with its noisy nested `cause` stack) up to callers.
-                        throw new Error(`Element not found (selector: ${selector}) on the page or in any accessible frame after ${maxAttempts} attempts`);
-                    }
-                    await new Promise(resolve => setTimeout(resolve, 1000)); // Wait before retry
-                }
-            }
-            throw new Error('Failed to find clickable element after multiple attempts');
-        };
-
-        // Find a clickable element
-        let element;
-        try {
-            element = await findClickableElement(selector);
-        } catch (error) {
-            console.error('Error finding clickable element:', error);
+        if (handles.length === 0) {
             return res.status(404).json({
-                error: 'No clickable element found',
-                message: `Could not find a clickable element matching selector: ${selector}`,
-                details: process.env.NODE_ENV === 'development' ? error.message : undefined
+                error: 'Element not found',
+                message: `No element matched selector: ${selector}`,
+                selector,
+                matches: 0,
+                sessionId
             });
         }
 
-        try {
-            // Wait a bit before interacting with the element
-            await new Promise(resolve => setTimeout(resolve, randomDelay(100, 250)));
+        const picked = await pickHandle(handles, index);
 
-            // Scroll into view if needed
-            await element.evaluate(el => {
-                el.scrollIntoView({
-                    behavior: 'smooth',
-                    block: 'center',
-                    inline: 'center'
-                });
+        if (!picked.handle) {
+            return res.status(404).json({
+                error: 'Element not found',
+                message: `Selector matched ${handles.length} element(s) but index ${index} is out of range`,
+                selector,
+                matches: handles.length,
+                sessionId
             });
+        }
 
-            // Wait for any potential animations
-            await new Promise(resolve => setTimeout(resolve, randomDelay(100, 250)));
+        const clickable = picked.visible && picked.unobstructed;
 
-            // Move mouse to the element with human-like movement
+        // Rejected before anything is armed, so this path leaks no listeners
+        // and no pending navigation wait.
+        if (!clickable && !domFallback) {
+            return res.status(409).json({
+                error: 'Element not clickable',
+                message: picked.visible
+                    ? 'Element is covered by another element'
+                    : 'Element is not visible',
+                selector,
+                matches: handles.length,
+                index: picked.index,
+                sessionId
+            });
+        }
+
+        // Arm the navigation watch before clicking so a fast redirect can't
+        // fire in the gap between the click and the wait being set up.
+        const navigation = waitForNavigation
+            ? armNavigation(page, { timeout: navigationTimeout, grace: navigationGrace })
+            : null;
+
+        // A click that opens a new tab: adopt it as the session's page and
+        // drop the tab it was opened from, so the response reports the tab
+        // the caller actually ended up on.
+        let openedTab = null;
+        const onTargetCreated = async (target) => {
             try {
-                await element.hover();
-                await new Promise(resolve => setTimeout(resolve, randomDelay(100, 250)));
-            } catch (hoverError) {
-                console.log('Hover failed, but continuing with click:', hoverError.message);
+                const newPage = await target.page();
+                if (newPage && !openedTab) openedTab = newPage;
+            } catch (targetError) {
+                console.error('Error handling new tab:', targetError);
             }
+        };
+        if (allowNewTab && session.browser) {
+            session.browser.on('targetcreated', onTargetCreated);
+        }
 
-            // Set up navigation promise before clicking
-            const navigationPromise = waitForNavigation ?
-                page.waitForNavigation({
-                    waitUntil: ['domcontentloaded', 'networkidle0'],
-                    timeout: navigationTimeout
-                }).catch(e => console.log('Navigation timeout/error:', e.message)) :
-                Promise.resolve();
-
-            // Set up new tab handling if allowed
-            let newTabResolve;
-            const newTabPromise = new Promise((resolve) => {
-                newTabResolve = resolve;
-            });
-
-            const handleNewTab = async (target) => {
+        let method = 'mouse';
+        try {
+            // A hidden or covered element can't receive a real mouse click, so
+            // go straight to the in-page dispatch rather than clicking whatever
+            // is on top of it.
+            if (clickable) {
                 try {
-                    const newPage = await target.page();
-                    if (newPage) {
-                        // Wait for 2-3 seconds before closing the original tab
-                        const closeDelay = randomDelay(2000, 3000);
-                        console.log(`New tab opened, will close original tab in ${closeDelay}ms`);
-
-                        setTimeout(async () => {
-                            try {
-                                if (!page.isClosed()) {
-                                    console.log('Closing original tab...');
-                                    await page.close();
-                                }
-                            } catch (e) {
-                                console.error('Error closing original tab:', e);
-                            }
-                        }, closeDelay);
-
-                        session.page = newPage;
-                        session.browser = session.browser; // Keep the same browser instance
-                        newTabResolve(newPage);
-                        return true;
-                    }
-                } catch (e) {
-                    console.error('Error handling new tab:', e);
+                    await picked.handle.click({ delay: clickDelay ?? randomDelay(20, 80) });
+                } catch (mouseError) {
+                    if (!domFallback) throw mouseError;
+                    console.log(`Mouse click failed, falling back to DOM click: ${mouseError.message}`);
+                    await picked.handle.evaluate((el) => el.click());
+                    method = 'dom';
                 }
-                return false;
-            };
-
-            if (allowNewTab && session.browser) {
-                session.browser.on('targetcreated', handleNewTab);
-                // Set a timeout to clean up the event listener
-                setTimeout(() => {
-                    if (session.browser) {
-                        session.browser.off('targetcreated', handleNewTab);
-                    }
-                    newTabResolve();
-                }, navigationTimeout);
+            } else {
+                await picked.handle.evaluate((el) => el.click());
+                method = 'dom';
             }
 
-            // Click the element
-            await element.click({ delay: randomDelay(200, 400) });
+            const navigated = navigation ? await navigation.settle() : false;
 
-            // Wait for either navigation or new tab, but don't fail if neither happens
-            await Promise.race([
-                Promise.all([navigationPromise, newTabPromise]),
-                new Promise(resolve => setTimeout(resolve, navigationTimeout))
-            ]);
-
-            // Clean up the event listener if it wasn't already removed
             if (allowNewTab && session.browser) {
-                session.browser.off('targetcreated', handleNewTab);
+                session.browser.off('targetcreated', onTargetCreated);
+                if (openedTab && openedTab !== page) {
+                    // Close the opener first so the adopted tab becomes tab 0.
+                    await page.close().catch((e) => console.error('Error closing original tab:', e));
+                    session.page = openedTab;
+                }
             }
 
-            // Update the active page reference
             const activePage = await getFirstTab(session);
             session.page = activePage;
             session.lastActivity = Date.now();
 
-            // Get the final URL and title
             const finalUrl = activePage.url();
-            const pageTitle = await activePage.title();
+            const pageTitle = await activePage.title().catch(() => '');
 
             return res.json({
                 success: true,
                 sessionId,
+                selector,
                 clicked: true,
-                navigated: finalUrl !== originalUrl,
+                method,
+                matches: handles.length,
+                index: picked.index,
+                visible: picked.visible,
+                unobstructed: picked.unobstructed,
+                navigated: navigated || finalUrl !== originalUrl,
                 url: finalUrl,
                 title: pageTitle
             });
 
         } catch (clickError) {
-            console.error('Error during click action:', clickError);
-            // Even if there was an error, ensure we're on the first tab
-            await closeExtraTabs(session);
-            const firstPage = await getFirstTab(session);
-            session.page = firstPage;
-
-            throw clickError; // Re-throw to be caught by the outer catch
+            if (navigation) navigation.cancel();
+            if (allowNewTab && session.browser) {
+                session.browser.off('targetcreated', onTargetCreated);
+            }
+            throw clickError;
         }
 
     } catch (error) {
         console.error('Error in clickSession:', error);
 
-        // Ensure we're on the first tab even in case of error
+        // A malformed selector is the caller's mistake, not a server fault.
+        // Keep only the first line: Puppeteer appends its own internal
+        // evaluateHandle stack to the message, which is noise for the caller.
+        if (isInvalidSelectorError(error)) {
+            return res.status(400).json({
+                error: 'Invalid selector',
+                message: String(error.message).split('\n')[0],
+                selector
+            });
+        }
+
+        // Ensure we're back on a single, usable tab even in case of error.
         try {
             if (sessions.has(sessionId)) {
-                const session = sessions.get(sessionId);
                 await closeExtraTabs(session);
-                const firstPage = await getFirstTab(session);
-                session.page = firstPage;
+                session.page = await getFirstTab(session);
             }
         } catch (cleanupError) {
             console.error('Error during cleanup after click error:', cleanupError);
         }
 
-        res.status(500).json({
+        return res.status(500).json({
             error: 'Failed to perform click action',
             message: error.message,
+            selector,
             details: process.env.NODE_ENV === 'development' ? error.stack : undefined
         });
+    } finally {
+        await disposeAll(handles);
     }
 };
 

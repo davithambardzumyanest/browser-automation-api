@@ -397,10 +397,14 @@ POST /api/session/:sessionId/click
 ```
 
 Click an element by CSS selector. This endpoint automatically handles:
-- Element visibility and scrolling
-- Human-like delays and interactions
-- Tab management (automatically closes new tabs and returns to the main tab)
-- Navigation waiting
+- Element visibility, obstruction checking and scrolling
+- Elements inside iframes and shadow roots
+- Navigation waiting (only when the click actually navigates)
+- Tab management (returns to a single tab)
+
+Latency is bounded by the request: the worst case is `timeout + navigationTimeout`
+(3s + 5s by default). A selector that never matches costs `timeout` and then 404s
+- it is not retried. A malformed selector 400s immediately.
 
 **Request Body:**
 ```json
@@ -411,19 +415,38 @@ Click an element by CSS selector. This endpoint automatically handles:
 
 **Parameters:**
 - `selector` (string, required) - CSS selector of the element to click
-- `waitForNavigation` (boolean, optional, default: true) - Wait for page navigation to complete
-- `timeout` (number, optional, default: 10000) - Maximum time to wait for the element in milliseconds
+- `index` (number, optional) - Which match to click. Default: the first visible, unobstructed match
+- `timeout` (number, optional, default: 3000) - Max ms to wait for the element to appear. `0` fails immediately if it isn't already there
+- `waitForNavigation` (boolean, optional, default: true) - Wait for a navigation caused by the click
+- `navigationTimeout` (number, optional, default: 5000) - Max ms to wait *once a navigation has started*
+- `navigationGrace` (number, optional, default: 1000) - Max ms to wait for a navigation to start at all. A click that navigates nothing costs this, not `navigationTimeout`
+- `allowNewTab` (boolean, optional, default: false) - Follow a click that opens a new tab, adopting it as the session's page
+- `searchFrames` (boolean, optional, default: true) - Also look inside iframes on a main-frame miss
+- `domFallback` (boolean, optional, default: true) - Fall back to `element.click()` when the element can't take a real mouse click. Set `false` to get a `409` instead
+- `clickDelay` (number, optional) - Mousedown→mouseup hold in ms. Default: random 20-80
 
 **Response:**
 ```json
 {
   "success": true,
   "sessionId": "550e8400-e29b-41d4-a716-446655440000",
+  "selector": "input[name='btnK']",
   "clicked": true,
+  "method": "mouse",
+  "matches": 1,
+  "index": 0,
+  "visible": true,
+  "unobstructed": true,
+  "navigated": true,
   "url": "https://www.google.com/search?q=...",
   "title": "puppeteer - Google Search"
 }
 ```
+
+**Errors:**
+- `400 Invalid selector` - the selector is malformed (returned immediately)
+- `404 Element not found` - nothing matched within `timeout`, or `index` is out of range
+- `409 Element not clickable` - only when `domFallback: false`
 
 #### 10. Type Text in Input Field
 ```

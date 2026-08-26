@@ -1,118 +1,13 @@
 const { sessions } = require('../state');
 const { getFirstTab } = require('../helpers/tabs');
-const { wait, randomDelay } = require('../helpers/timing');
+const { randomDelay } = require('../helpers/timing');
+const { resolveHandles, pickHandle, disposeAll, isInvalidSelectorError } = require('../helpers/clickTargets');
 
 // Puppeteer ships an `xpath/` query handler, so an XPath can be handed to the
 // same $/$$/waitForSelector machinery as a CSS selector - no manual
-// document.evaluate + handle plumbing needed.
+// document.evaluate + handle plumbing needed. Resolution, visibility probing
+// and handle cleanup are shared with /click via helpers/clickTargets.
 const asPuppeteerSelector = (xpath) => `xpath/${xpath}`;
-
-// How many matches to test for visibility before giving up and using the
-// first one. Each test is one cheap round trip; the cap keeps a sloppy XPath
-// matching hundreds of nodes from turning into hundreds of round trips.
-const MAX_VISIBILITY_PROBES = 5;
-
-/**
- * Ask the page, in one round trip, whether the element can take a real mouse
- * click: rendered at a non-zero size, and actually the topmost thing at its
- * own center. Without the elementFromPoint half, an element sitting under an
- * overlay takes a "successful" mouse click that the overlay swallows - the
- * request reports clicked:true while the element's handler never runs.
- */
-const probeElement = (handle) => handle.evaluate((el) => {
-    const style = window.getComputedStyle(el);
-    if (style.visibility === 'hidden' || style.display === 'none' || style.opacity === '0') {
-        return { visible: false, unobstructed: false };
-    }
-
-    const rect = el.getBoundingClientRect();
-    if (rect.width === 0 || rect.height === 0) {
-        return { visible: false, unobstructed: false };
-    }
-
-    const topmost = el.ownerDocument.elementFromPoint(
-        rect.left + rect.width / 2,
-        rect.top + rect.height / 2
-    );
-    // A descendant is fine - the click bubbles up to el. An ancestor or an
-    // unrelated node means something else would receive the event.
-    return {
-        visible: true,
-        unobstructed: !!topmost && (topmost === el || el.contains(topmost))
-    };
-}).catch(() => ({ visible: false, unobstructed: false }));
-
-const disposeAll = (handles) =>
-    Promise.all(handles.map((handle) => handle.dispose().catch(() => {})));
-
-/**
- * Resolve the XPath to element handles.
- *
- * Ordered fastest-first: one query of the main frame covers the common case.
- * Only a miss pays for the iframe scan, and only a miss in every frame pays
- * for waiting. Frames are scanned before waiting, not after - scanning is a
- * couple of cheap round trips, while waiting is whole seconds, so the old
- * order made every in-iframe element cost the full timeout.
- */
-const resolveHandles = async (page, xpath, { timeout, searchFrames }) => {
-    const selector = asPuppeteerSelector(xpath);
-
-    const attempt = async () => {
-        const frames = searchFrames ? page.frames() : [page.mainFrame()];
-        for (const frame of frames) {
-            try {
-                const handles = await frame.$$(selector);
-                if (handles.length > 0) return { handles, frame };
-            } catch (frameError) {
-                // Frame may be detaching mid-navigation; try the next one.
-            }
-        }
-        return null;
-    };
-
-    const first = await attempt();
-    if (first) return first;
-
-    // Element isn't there yet - poll until the deadline so late-rendered
-    // elements (and elements in frames that attach late) are still found.
-    const deadline = Date.now() + timeout;
-    while (Date.now() < deadline) {
-        await wait(Math.min(100, Math.max(0, deadline - Date.now())));
-        const found = await attempt();
-        if (found) return found;
-    }
-
-    return { handles: [], frame: null };
-};
-
-/**
- * Pick which match to click: an explicit index when the caller gave one,
- * otherwise the first match that is visible and unobstructed, preferring a
- * merely-visible one over nothing before falling back to the first match.
- */
-const pickHandle = async (handles, index) => {
-    if (typeof index === 'number') {
-        const handle = handles[index] || null;
-        const probe = handle ? await probeElement(handle) : { visible: null, unobstructed: null };
-        return { handle, index, ...probe };
-    }
-
-    const probes = Math.min(handles.length, MAX_VISIBILITY_PROBES);
-    let firstVisible = null;
-
-    for (let i = 0; i < probes; i++) {
-        const probe = await probeElement(handles[i]);
-        if (probe.visible && probe.unobstructed) {
-            return { handle: handles[i], index: i, ...probe };
-        }
-        if (probe.visible && !firstVisible) {
-            firstVisible = { handle: handles[i], index: i, ...probe };
-        }
-    }
-
-    if (firstVisible) return firstVisible;
-    return { handle: handles[0], index: 0, visible: false, unobstructed: false };
-};
 
 /**
  * Click the first element matching an XPath.
@@ -175,7 +70,11 @@ const clickXPath = async (req, res) => {
 
         const originalUrl = page.url();
 
-        const resolved = await resolveHandles(page, xpath, { timeout, searchFrames });
+        const resolved = await resolveHandles(page, {
+            query: asPuppeteerSelector(xpath),
+            timeout,
+            searchFrames
+        });
         handles = resolved.handles;
 
         if (handles.length === 0) {
@@ -265,7 +164,7 @@ const clickXPath = async (req, res) => {
         // An invalid expression is the caller's mistake, not a server fault.
         // Keep only the first line: Puppeteer appends its own internal
         // evaluateHandle stack to the message, which is noise for the caller.
-        if (/is not a valid XPath|SyntaxError/i.test(error.message || '')) {
+        if (isInvalidSelectorError(error)) {
             return res.status(400).json({
                 error: 'Invalid XPath',
                 message: String(error.message).split('\n')[0],
