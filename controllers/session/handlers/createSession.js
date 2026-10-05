@@ -24,6 +24,7 @@ const { getProxyCredentials, stripProxyCredentials, applyProxyAuth, buildAuthent
 const proxyChain = require('proxy-chain');
 const { installProtocolGuard, DEFAULT_BLOCKED_SCHEMES } = require('./dismissProtocolDialog');
 const { detectProxyGeo } = require('../helpers/geoip');
+const { enableMediaBlocking } = require('../helpers/mediaBlocking');
 
 /**
  * Create a new browser session with anti-detection measures
@@ -158,7 +159,13 @@ const createSession = async (req, res) => {
     const browserArgs = [...BROWSER_ARGS];
 
     if (!allowMedia) {
-        browserArgs.push('--blink-settings=imagesEnabled=false');
+        browserArgs.push(
+            '--blink-settings=imagesEnabled=false',
+            // Chrome's own background traffic (variations, optimization
+            // guide, safe browsing lists...) otherwise also goes through
+            // --proxy-server. None of it is page traffic.
+            '--disable-background-networking'
+        );
     }
 
     try {
@@ -189,9 +196,10 @@ const createSession = async (req, res) => {
             `--lang=${locale}`,
             // Belt-and-suspenders alongside the runtime page.setUserAgent()
             // CDP override: baking the UA in at launch means it's never at
-            // the mercy of interception/tab-resolution timing later - see the
-            // note by identityHeaders below for why the runtime-only override
-            // wasn't reliably reaching the wire.
+            // the mercy of interception/tab-resolution timing later (the
+            // runtime-only override didn't reliably reach the wire while
+            // page-level request interception was on - see
+            // ANTI_DETECTION_TROUBLESHOOTING.md #2).
             `--user-agent=${finalUserAgent}`
         );
         // For non-headless mode (visible browser), optimize args for visibility
@@ -379,6 +387,11 @@ const createSession = async (req, res) => {
         // Confirmed empirically: switching off the real-Chrome channel made
         // the reCAPTCHA challenge stop appearing.
         const browser = await puppeteer.launch(launchOptions);
+        // Before any page exists, so every tab is covered from its first
+        // request - see helpers/mediaBlocking.js.
+        if (!allowMedia) {
+            await enableMediaBlocking(browser);
+        }
         const context = browser.defaultBrowserContext();
 
         // Set up realistic permissions. 'geolocation' is deliberately NOT
@@ -622,112 +635,6 @@ const createSession = async (req, res) => {
             }
         }
 
-        let isIntercepting = false;
-
-        // page.setUserAgent()'s CDP-level override (Network.setUserAgentOverride)
-        // does not reliably survive once request interception is active: with
-        // Fetch-domain interception on, request.continue() with no explicit
-        // headers resumes the request with Chromium's own raw, native
-        // user-agent/client-hint headers rather than the override - confirmed
-        // directly (wire-level User-Agent/Sec-CH-UA came back as
-        // "HeadlessChrome/<bundled-version>" with generic brands, not our
-        // spoofed values, despite setUserAgent() having been called and
-        // navigator.userAgent correctly reflecting it pre-navigation). Since
-        // interception has to stay on to block images/fonts, re-assert the
-        // identity headers explicitly on the continued request instead.
-        //
-        // This override is scoped to the top-level 'document' request only
-        // (confirmed 2026-08-24: passing an explicit `headers` object to
-        // request.continue() on *every* intercepted request - including the
-        // dozens of concurrent subresource requests a real page like
-        // google.com/search fires - reliably hung Chrome's Fetch-domain
-        // handling indefinitely; navigation to simple/low-request-count pages
-        // was unaffected, which is why this only showed up on resource-heavy
-        // real-world pages, not in isolated testing. request.continue() with
-        // no headers argument is the fast/native path and doesn't touch
-        // Sec-Fetch-*/Accept/etc that Chrome computes per-request (see #7/#10
-        // in ANTI_DETECTION_TROUBLESHOOTING.md) - only the document request's
-        // identity actually needed forcing in the first place.
-        //
-        // sec-ch-ua-mobile was hardcoded '?0' here, so a session emulating a
-        // touchscreen phone and sending a "Mobile Safari" UA still told every
-        // server it was a desktop - on the document request specifically, the
-        // one request whose identity this override exists to force. It now
-        // comes from the same client-hints object Chrome itself was given, so
-        // header, navigator.userAgentData and UA string all agree. See
-        // ANTI_DETECTION_TROUBLESHOOTING.md #20.
-        const identityHeaders = { 'user-agent': finalUserAgent };
-        if (chromeHints) {
-            identityHeaders['sec-ch-ua'] = chromeHints.secChUa;
-            identityHeaders['sec-ch-ua-mobile'] = chromeHints.secChUaMobile;
-            identityHeaders['sec-ch-ua-platform'] = platformProfile.secChUaPlatform;
-        }
-
-        // Request interception is now enabled ONLY when something actually
-        // needs to be blocked (allowMedia:false). It used to be switched on
-        // unconditionally, which meant that on a default session - where the
-        // handler had nothing to abort - its sole remaining effect was to
-        // rewrite the top-level document request's headers, and that rewrite
-        // was actively causing the Google Search captcha.
-        //
-        // Why the rewrite is harmful: request.continue({headers}) makes
-        // Chrome tear down and REBUILD the request from the plain object it
-        // is handed. request.headers() is a lowercased, unordered map, so
-        // everything Chrome knows about its own native header ORDER is lost
-        // in the round trip - and header order is one of the cheapest, most
-        // reliable automation signals there is, because it is a property of
-        // the client's networking stack that content-level spoofing can't
-        // reach. Only the document request was ever rewritten, so only
-        // top-level navigations carried the anomaly.
-        //
-        // Confirmed 2026-08-24 with the in-page fetch() control this file's
-        // troubleshooting doc prescribes: on ONE session, on a clean
-        // non-proxy IP where plain curl got HTTP 200, a top-level navigation
-        // to google.com/search landed on /sorry/index while fetch() to the
-        // exact same URL from that same page returned a real 92KB SERP, 200,
-        // no captcha. Same browser, same IP, same cookies, same TLS - the
-        // only difference between the two paths was this rewrite, which
-        // applies to the navigation and not to fetch(). See
-        // ANTI_DETECTION_TROUBLESHOOTING.md #21.
-        //
-        // The UA/Client-Hints identity that the rewrite existed to protect
-        // (#2) is preserved without it: with no Fetch-domain interception
-        // active, page.setUserAgent()'s Network.setUserAgentOverride applies
-        // natively to every request, header order included. The override only
-        // fails to stick when interception IS on, which is exactly the case
-        // we now avoid by default.
-        const needsInterception = !allowMedia;
-        if (needsInterception) {
-            await page.setRequestInterception(true);
-            if (!isIntercepting) {
-                isIntercepting = true;
-                page.on('request', async (request) => {
-                    try {
-                        if (['image', 'font', 'media', 'imageset'].includes(request.resourceType())) {
-                            await request.abort();
-                        } else if (request.resourceType() === 'document') {
-                            // Interception is already active here, so the
-                            // native UA override does NOT survive (#2) and
-                            // the explicit re-assert is still required -
-                            // accepting the header-order cost above as the
-                            // price of blocking media. Sessions that care
-                            // about Google Search should stay on the default
-                            // allowMedia:true path.
-                            await request.continue({
-                                headers: { ...request.headers(), ...identityHeaders }
-                            });
-                        } else {
-                            await request.continue();
-                        }
-                    } catch (error) {
-                        // Ignore errors from aborted requests
-                        if (!error.message.includes('Request is already handled')) {
-                            console.error('Request interception error:', error);
-                        }
-                    }
-                });
-            }
-        }
         const stagehand = new Stagehand({
             env: 'LOCAL',
             localBrowserLaunchOptions: {
