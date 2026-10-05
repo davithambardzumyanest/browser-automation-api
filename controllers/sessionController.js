@@ -724,12 +724,18 @@ const validate2CaptchaConfig = async (page) => {
 
 const solveRecaptchaEndpoint = async (req, res) => {
     const { sessionId } = req.params;
-    const { submitAfter = false, waitTime = 5000 } = req.body;
+    const { submitAfter = false, waitTime = 5000, version = 'v2', action, minScore } = req.body;
     const session = sessions.get(sessionId);
 
     if (!session) {
         return res.status(404).json({
             error: "Session not found"
+        });
+    }
+
+    if (version !== 'v2' && version !== 'v3') {
+        return res.status(400).json({
+            error: "version must be 'v2' or 'v3'"
         });
     }
 
@@ -765,6 +771,15 @@ const solveRecaptchaEndpoint = async (req, res) => {
 
         const captchaInfo = await extractRecaptchaInfo(page);
 
+        // v3 is opt-in via the request body; detection only supplies the
+        // render= sitekey and a best-effort action for it.
+        captchaInfo.version = version;
+        if (version === 'v3') {
+            captchaInfo.siteKey = captchaInfo.v3SiteKey || captchaInfo.siteKey;
+            captchaInfo.action = captchaInfo.v3Action;
+        }
+        if (action) captchaInfo.action = action;
+
         if (!captchaInfo.siteKey) {
             // No captcha on the page is the common case, not a client error -
             // 200 here so callers checking response.ok don't treat "nothing
@@ -778,6 +793,7 @@ const solveRecaptchaEndpoint = async (req, res) => {
         }
 
         console.log("🎫 Sitekey:", captchaInfo.siteKey);
+        console.log("🧩 Version:", captchaInfo.version);
         console.log("🏢 Enterprise:", captchaInfo.isEnterprise);
         console.log("🔑 s Parameter:", captchaInfo.s);
         console.log("🎬 Action:", captchaInfo.action);
@@ -789,7 +805,9 @@ const solveRecaptchaEndpoint = async (req, res) => {
             sessionProxy,
             captchaInfo.isEnterprise,
             captchaInfo.s,
-            captchaInfo.action
+            captchaInfo.action,
+            captchaInfo.version,
+            minScore
         );
 
         console.log("🎯 Captcha solved");
@@ -822,6 +840,7 @@ const solveRecaptchaEndpoint = async (req, res) => {
             submitResult,
             captcha: {
                 siteKey: captchaInfo.siteKey,
+                version: captchaInfo.version,
                 isEnterprise: captchaInfo.isEnterprise,
                 s: captchaInfo.s || null,
                 action: captchaInfo.action || null
@@ -1065,9 +1084,28 @@ const extractRecaptchaInfo = async (page) => {
             isEnterprise: false,
             s: null,
             action: null,
+            v3SiteKey: null,
+            v3Action: null,
             widgetIds: [],
             iframeSources: []
         };
+
+        // v3 is loaded as api.js?render=<sitekey> (v2 uses render=explicit/onload
+        // or no render param at all).
+        for (const script of document.querySelectorAll('script[src*="recaptcha"]')) {
+            try {
+                const url = new URL(script.src, location.href);
+                const render = url.searchParams.get('render');
+                if (render && render !== 'explicit' && render !== 'onload') {
+                    result.v3SiteKey = render;
+                }
+                if (url.pathname.includes('enterprise')) {
+                    result.isEnterprise = true;
+                }
+            } catch (error) {
+                console.log('Failed to parse reCAPTCHA script URL:', error.message);
+            }
+        }
 
         const iframes = Array.from(document.querySelectorAll('iframe[src*="recaptcha"]'));
         result.iframeSources = iframes.map((iframe) => iframe.src);
@@ -1149,6 +1187,21 @@ const extractRecaptchaInfo = async (page) => {
 
         result.widgetIds = [...new Set(result.widgetIds)];
         result.callbackCount = callbacks.length;
+
+        if (result.v3SiteKey) {
+            result.siteKey = result.siteKey || result.v3SiteKey;
+
+            // The v3 action lives in the execute() call, not in ___grecaptcha_cfg -
+            // best effort: find it in inline scripts.
+            const actionRe = /execute\s*\([^)]*?action\s*:\s*['"`]([\w\/-]+)['"`]/;
+            for (const script of document.querySelectorAll('script:not([src])')) {
+                const match = script.textContent.match(actionRe);
+                if (match) {
+                    result.v3Action = match[1];
+                    break;
+                }
+            }
+        }
 
         return result;
     });
@@ -1290,7 +1343,7 @@ const injectRecaptchaToken = async (page, token, captchaInfo) => {
  * @param {Object} proxy - Proxy configuration (optional)
  * @returns {Promise<string>} The solved reCAPTCHA token
  */
-const solveRecaptchaWith2Captcha = async (page, siteKey, pageUrl, proxy = null, isEnterprise = false, s = null, action = null) => {
+const solveRecaptchaWith2Captcha = async (page, siteKey, pageUrl, proxy = null, isEnterprise = false, s = null, action = null, version = 'v2', minScore = 0.7) => {
     const API_KEY = process.env.TWO_CAPTCHA_API_KEY;
     
     if (!API_KEY) {
@@ -1372,28 +1425,39 @@ const solveRecaptchaWith2Captcha = async (page, siteKey, pageUrl, proxy = null, 
             method: 'userrecaptcha',
             googlekey: siteKey,
             pageurl: pageUrl,
-            invisible: 0,
-            version: 'v2',
             soft_id: 2834,
             header_acao: 1,
             json: 1,
             userAgent: browserInfo.userAgent
         };
 
+        const isV3 = version === 'v3';
+
+        if (isV3) {
+            apiParams.version = 'v3';
+            apiParams.min_score = minScore ?? 0.7;
+            // 2Captcha defaults to 'verify' when omitted; a mismatched action
+            // gets rejected by sites that check it server-side.
+            apiParams.action = action || 'verify';
+        } else {
+            apiParams.version = 'v2';
+            apiParams.invisible = 0;
+
+            if (s) {
+                apiParams['data-s'] = s;
+            }
+
+            if (action) {
+                apiParams.action = action;
+            }
+        }
+
         if (isEnterprise) {
             apiParams.enterprise = 1;
         }
 
-        if (s) {
-            apiParams['data-s'] = s;
-        }
-
-        if (action) {
-            apiParams.action = action;
-        }
-
-        // Add proxy parameters if proxy is available
-        if (proxy) {
+        // 2Captcha doesn't support proxies for v3
+        if (proxy && !isV3) {
             let proxyString = '';
             let proxyType = 'HTTP'; // Default proxy type
             
