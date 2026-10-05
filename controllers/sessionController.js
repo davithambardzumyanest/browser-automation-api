@@ -807,7 +807,8 @@ const solveRecaptchaEndpoint = async (req, res) => {
             captchaInfo.s,
             captchaInfo.action,
             captchaInfo.version,
-            minScore
+            minScore,
+            captchaInfo.isInvisible
         );
 
         console.log("🎯 Captcha solved");
@@ -1084,6 +1085,7 @@ const extractRecaptchaInfo = async (page) => {
             isEnterprise: false,
             s: null,
             action: null,
+            isInvisible: false,
             v3SiteKey: null,
             v3Action: null,
             widgetIds: [],
@@ -1127,6 +1129,10 @@ const extractRecaptchaInfo = async (page) => {
                 if (iframe.src.includes('/enterprise/')) {
                     result.isEnterprise = true;
                 }
+
+                if (url.pathname.endsWith('/anchor') && url.searchParams.get('size') === 'invisible') {
+                    result.isInvisible = true;
+                }
             } catch (error) {
                 console.log('Failed to parse reCAPTCHA iframe URL:', error.message);
             }
@@ -1147,7 +1153,10 @@ const extractRecaptchaInfo = async (page) => {
                 return;
             }
 
-            if (visited.has(value)) {
+            // ___grecaptcha_cfg holds references to the widget's container
+            // element; walking into the DOM / React fibers picks up unrelated
+            // props such as a <form action="..."> URL.
+            if (visited.has(value) || value instanceof Node) {
                 return;
             }
             visited.add(value);
@@ -1164,7 +1173,8 @@ const extractRecaptchaInfo = async (page) => {
                 result.s = value.s;
             }
 
-            if (typeof value.action === 'string' && !result.action) {
+            // reCAPTCHA actions may only contain alphanumerics, slashes and underscores
+            if (typeof value.action === 'string' && /^[A-Za-z0-9_\/]+$/.test(value.action) && !result.action) {
                 result.action = value.action;
             }
 
@@ -1193,7 +1203,7 @@ const extractRecaptchaInfo = async (page) => {
 
             // The v3 action lives in the execute() call, not in ___grecaptcha_cfg -
             // best effort: find it in inline scripts.
-            const actionRe = /execute\s*\([^)]*?action\s*:\s*['"`]([\w\/-]+)['"`]/;
+            const actionRe = /execute\s*\([^)]*?action\s*:\s*['"`]([\w\/]+)['"`]/;
             for (const script of document.querySelectorAll('script:not([src])')) {
                 const match = script.textContent.match(actionRe);
                 if (match) {
@@ -1282,7 +1292,7 @@ const injectRecaptchaToken = async (page, token, captchaInfo) => {
                 return;
             }
 
-            if (visited.has(value)) {
+            if (visited.has(value) || value instanceof Node) {
                 return;
             }
             visited.add(value);
@@ -1343,7 +1353,7 @@ const injectRecaptchaToken = async (page, token, captchaInfo) => {
  * @param {Object} proxy - Proxy configuration (optional)
  * @returns {Promise<string>} The solved reCAPTCHA token
  */
-const solveRecaptchaWith2Captcha = async (page, siteKey, pageUrl, proxy = null, isEnterprise = false, s = null, action = null, version = 'v2', minScore = 0.7) => {
+const solveRecaptchaWith2Captcha = async (page, siteKey, pageUrl, proxy = null, isEnterprise = false, s = null, action = null, version = 'v2', minScore = 0.7, isInvisible = false) => {
     const API_KEY = process.env.TWO_CAPTCHA_API_KEY;
     
     if (!API_KEY) {
@@ -1441,7 +1451,7 @@ const solveRecaptchaWith2Captcha = async (page, siteKey, pageUrl, proxy = null, 
             apiParams.action = action || 'verify';
         } else {
             apiParams.version = 'v2';
-            apiParams.invisible = 0;
+            apiParams.invisible = isInvisible ? 1 : 0;
 
             if (s) {
                 apiParams['data-s'] = s;
@@ -2754,7 +2764,15 @@ const createSession = async (req, res) => {
         sessions.set(sessionId, {
             browser,
             stagehand,
-            agent: stagehand.agent(),
+            // Stagehand's built-in prompt gives the agent the starting URL and
+            // tells it to "navigate directly" to URLs it is confident in, so it
+            // tends to open every task with goto(<current url>) - reloading the
+            // page and wiping any state (filled fields, solved captchas).
+            agent: stagehand.agent({
+                systemPrompt: 'The starting URL is already open and fully loaded in the browser. ' +
+                    'Do not call goto with the current URL and never reload the page - begin by inspecting the current page state. ' +
+                    'Only use goto when the task requires navigating to a different URL.'
+            }),
             page,
             created: Date.now(),
             lastUsed: Date.now(),
