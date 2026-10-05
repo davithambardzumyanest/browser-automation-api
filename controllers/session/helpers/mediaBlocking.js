@@ -14,15 +14,16 @@
 const { BLOCKED_REQUEST_PATTERNS } = require('../../../config/blockedRequestPatterns');
 
 // Always aborted. Beyond the heavy media types, Ping (beacons) carries nothing
-// the session needs. Chrome's Fetch filter rejects TextTrack, Manifest and
-// Prefetch as resource types (Fetch.enable fails outright); subtitles and
-// manifests are tiny, and prefetches are caught via 'Other' below.
+// the session needs. Chrome's Fetch filter rejects TextTrack, Manifest,
+// Prefetch, EventSource and WebSocket as resource types (Fetch.enable fails
+// outright, and with it session creation); subtitles and manifests are tiny,
+// and prefetches are caught via 'Other' below.
 const BLOCKED_RESOURCE_TYPES = ['Image', 'Font', 'Media', 'Ping'];
 
 // Subresource types aborted when the URL matches BLOCKED_REQUEST_PATTERNS.
 // Document is deliberately absent: clicking a link that routes through one of
 // those domains still navigates.
-const AD_RESOURCE_TYPES = ['Script', 'Stylesheet', 'XHR', 'EventSource'];
+const AD_RESOURCE_TYPES = ['Script', 'Stylesheet', 'XHR'];
 
 // Types paused for every URL and decided per request: ad URLs, plus
 // speculative downloads (<link rel=prefetch>) the page may never use. Seen
