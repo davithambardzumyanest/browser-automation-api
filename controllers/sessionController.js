@@ -1,12 +1,19 @@
-const puppeteer = require('puppeteer-extra');
+const { addExtra } = require('puppeteer-extra');
 const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 const { Stagehand } = require('@browserbasehq/stagehand');
 const { v4: uuidv4 } = require('uuid');
 const { cleanupStaleProfileLocks } = require('../utils/browserProfile');
 const AIService = require('../services/aiService');
 
-// Add stealth plugin
-puppeteer.use(StealthPlugin());
+// Own puppeteer-extra instance: the shared default one also gets the full
+// stealth plugin from browserController. Its user-agent-override evasion is
+// left out because applyChromeIdentity sets the UA, client hints and locale
+// for each session; with both active, new tabs ended up with stealth's
+// Windows/en-US identity instead of the session's own.
+const puppeteer = addExtra(require('puppeteer'));
+const stealth = StealthPlugin();
+stealth.enabledEvasions.delete('user-agent-override');
+puppeteer.use(stealth);
 
 // Initialize AI service on startup
 AIService.initialize();
@@ -466,13 +473,18 @@ const registerBrowserRealism = async (page, profile) => {
             }));
         }
 
-        defineGetter(navigator, 'connection', () => ({
-            downlink: 10,
-            effectiveType: '4g',
-            rtt: 50,
-            saveData: false,
-            type: 'wifi'
-        }));
+        // Override the values on the real NetworkInformation object rather than
+        // replacing it with a plain one: sites call
+        // navigator.connection.addEventListener('change', ...), and a plain
+        // object made that throw (it crashed Dzen article pages). `type` isn't
+        // added because desktop Chrome doesn't expose it.
+        if (navigator.connection) {
+            const connectionProto = Object.getPrototypeOf(navigator.connection);
+            defineGetter(connectionProto, 'downlink', () => 10);
+            defineGetter(connectionProto, 'effectiveType', () => '4g');
+            defineGetter(connectionProto, 'rtt', () => 50);
+            defineGetter(connectionProto, 'saveData', () => false);
+        }
 
         defineGetter(screen, 'width', () => screenMetrics.width);
         defineGetter(screen, 'height', () => screenMetrics.height);
@@ -2517,16 +2529,20 @@ const createSession = async (req, res) => {
         attachConsoleRelay(page);
 
         // Also attach for any new pages (popups/new tabs)
-        browser.on('targetcreated', async target => {
-            try {
-                const newPage = await target.page();
-                if (newPage) {
-                    attachConsoleRelay(newPage);
-                    await setupPageRealism(newPage, browserProfile, headers);
+        // The promise is kept on the target so code that opens a tab itself
+        // (goto with newTab) can wait for the identity before navigating.
+        browser.on('targetcreated', target => {
+            target.realismReady = (async () => {
+                try {
+                    const newPage = await target.page();
+                    if (newPage) {
+                        attachConsoleRelay(newPage);
+                        await setupPageRealism(newPage, browserProfile, headers);
+                    }
+                } catch (e) {
+                    // ignore
                 }
-            } catch (e) {
-                // ignore
-            }
+            })();
         });
 
         // Normalize geolocation origins (support string or array)
@@ -2971,6 +2987,7 @@ const navigateSession = async (req, res) => {
         let targetPage = firstPage;
         if (newTab) {
             targetPage = await browser.newPage();
+            await targetPage.target().realismReady;
             session.page = targetPage;
         }
 
