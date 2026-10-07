@@ -1,0 +1,39 @@
+services:
+  browser-api:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # These override .env, whose values point at paths on the host machine.
+      PUPPETEER_EXECUTABLE_PATH: /usr/local/bin/chrome
+      PORT: 5000
+      DEFAULT_HEADLESS: "true"
+    # Published on localhost only: the API has no auth and can run arbitrary
+    # scripts in pages. Other containers reach it on the browser-api network.
+    ports:
+      - "127.0.0.1:${BROWSER_API_HOST_PORT:-5000}:5000"
+    # Chrome needs more shared memory than Docker's 64MB default.
+    shm_size: 1gb
+    # Reaps orphaned Chrome processes.
+    init: true
+    volumes:
+      - sessions:/app/sessions
+      - profiles:/app/profiles
+    networks:
+      - browser-api
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5000/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  sessions:
+  profiles:
+
+networks:
+  # Shared network other projects join to call http://browser-api:5000.
+  browser-api:
+    name: browser-api

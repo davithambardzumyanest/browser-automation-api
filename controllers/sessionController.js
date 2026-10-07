@@ -2486,7 +2486,12 @@ const createSession = async (req, res) => {
         }
         await context.overridePermissions('https://*', grantedPermissions);
 
-        const page = await browser.newPage();
+        // Configure the tab Chrome opens on launch instead of adding a second
+        // one. goto/closeExtraTabs keep only the first tab, so a separate
+        // newPage() left the session navigating the original, unconfigured
+        // tab (HeadlessChrome UA, no timezone/headers/fingerprint patches).
+        const [initialPage] = await browser.pages();
+        const page = initialPage || await browser.newPage();
 
         // Do not force Sec-Fetch-*/Upgrade-Insecure-Requests here: those are
         // per-request, browser-computed headers. Statically pinning them (this
