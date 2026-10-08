@@ -12,6 +12,11 @@ const closeSession = async (sessionId) => {
         }
         sessions.delete(sessionId);
 
+        const { directAssetStats } = session;
+        if (directAssetStats?.requests || directAssetStats?.fallbacks) {
+            console.log(`Session ${sessionId}: ${directAssetStats.requests} assets (${(directAssetStats.bytes / 1024 / 1024).toFixed(2)} MB) fetched without the proxy, ${directAssetStats.fallbacks} fell back to it`);
+        }
+
         // Local proxy-chain forwarding server started in createSession.js -
         // leaks a listening port/process if not explicitly closed (unlike
         // Chrome's own process, it isn't a child of the browser being

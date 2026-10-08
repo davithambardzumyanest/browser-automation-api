@@ -28,6 +28,7 @@
     "puppeteer": "^24.25.0",
     "puppeteer-extra": "^3.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "tldts": "^7.4.8",
     "uuid": "^9.0.1",
     "zod": "^3.25.76"
   }

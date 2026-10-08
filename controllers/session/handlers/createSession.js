@@ -25,6 +25,8 @@ const proxyChain = require('proxy-chain');
 const { installProtocolGuard, DEFAULT_BLOCKED_SCHEMES } = require('./dismissProtocolDialog');
 const { detectProxyGeo } = require('../helpers/geoip');
 const { enableMediaBlocking } = require('../helpers/mediaBlocking');
+const { DEFAULT_PROXY_BYPASS_HOSTS, splitProxyBypass } = require('../../../config/proxyBypassHosts');
+const { enableDirectAssets } = require('../helpers/directAssets');
 
 /**
  * Create a new browser session with anti-detection measures
@@ -97,6 +99,15 @@ const createSession = async (req, res) => {
         // not worth adding to every session. Turn it on for headful runs against
         // sites that push a mobile app (Google Maps on an Android UA).
         blockExternalProtocols = false,
+        // Hosts fetched directly instead of through `proxy`, to save proxy
+        // bandwidth on static CDN assets - see config/proxyBypassHosts.js.
+        // An array replaces the default list; false sends everything
+        // through the proxy.
+        proxyBypass = DEFAULT_PROXY_BYPASS_HOSTS,
+        // Fetch third-party scripts/styles/images/fonts/media directly
+        // instead of through `proxy` - see helpers/directAssets.js. Off when
+        // proxyBypass is false (everything through the proxy).
+        directAssets = proxyBypass !== false,
     } = body;
 
     let locale = body.locale ?? 'en-US';
@@ -156,16 +167,26 @@ const createSession = async (req, res) => {
     console.log(height)
     const headers = buildConsistentHeaders({ customHeaders: headersParam });
 
-    const browserArgs = [...BROWSER_ARGS];
+    const browserArgs = [
+        ...BROWSER_ARGS,
+        // Chrome's own background traffic (variations, optimization guide,
+        // safe browsing lists...) otherwise also goes through --proxy-server.
+        // None of it is page traffic, so no site can see it is missing.
+        '--disable-background-networking',
+        // What --disable-background-networking misses (confirmed in a
+        // net-log): the component updater (update.googleapis.com) and GCM
+        // push registration (android.clients.google.com, mtalk.google.com).
+        // Pointed at a dead loopback port, which Chrome never proxies, so
+        // they fail locally. Network time and autofill-server lookups are
+        // switched off in the --disable-features list below.
+        '--component-updater=url-source=http://127.0.0.1:9',
+        '--gcm-checkin-url=http://127.0.0.1:9',
+        '--gcm-registration-url=http://127.0.0.1:9',
+        '--gcm-mcs-endpoint=http://127.0.0.1:9'
+    ];
 
     if (!allowMedia) {
-        browserArgs.push(
-            '--blink-settings=imagesEnabled=false',
-            // Chrome's own background traffic (variations, optimization
-            // guide, safe browsing lists...) otherwise also goes through
-            // --proxy-server. None of it is page traffic.
-            '--disable-background-networking'
-        );
+        browserArgs.push('--blink-settings=imagesEnabled=false');
     }
 
     try {
@@ -268,6 +289,11 @@ const createSession = async (req, res) => {
                     launchOptions.args.push(`--proxy-server=${stripProxyCredentials(proxy.server)}`);
                 }
             }
+
+            const { hosts: bypassHosts } = splitProxyBypass(proxyBypass);
+            if (bypassHosts.length) {
+                launchOptions.args.push(`--proxy-bypass-list=${bypassHosts.join(';')}`);
+            }
         }
 
         // Set up user data directory
@@ -368,7 +394,11 @@ const createSession = async (req, res) => {
             // registered Chrome feature name (141 only ships
             // ExternalProtocolDialogShowAlwaysOpenCheckbox) and unknown names
             // are silently ignored, so it is inert - see docs/directories.
-            '--disable-features=IsolateOrigins,site-per-process,ExternalProtocolDialog',
+            // NetworkTimeServiceQuerying (clients2.google.com/time) and
+            // AutofillServerCommunication (content-autofill.googleapis.com):
+            // Chrome's own background requests, which otherwise go through
+            // the proxy - see browserArgs above.
+            '--disable-features=IsolateOrigins,site-per-process,ExternalProtocolDialog,NetworkTimeServiceQuerying,AutofillServerCommunication',
             `--window-size=${viewportWidth},${viewportHeight}`,
         );
 
@@ -392,6 +422,18 @@ const createSession = async (req, res) => {
         if (!allowMedia) {
             await enableMediaBlocking(browser);
         }
+        const directAssetStats = proxy && directAssets
+            ? await enableDirectAssets(browser, {
+                bypassHosts: splitProxyBypass(proxyBypass).hosts,
+                bypassPaths: splitProxyBypass(proxyBypass).paths,
+                clientHints: chromeHints ? {
+                    'sec-ch-ua': chromeHints.secChUa,
+                    'sec-ch-ua-mobile': chromeHints.secChUaMobile,
+                    'sec-ch-ua-platform': platformProfile.secChUaPlatform
+                } : {},
+                allowMedia
+            })
+            : null;
         const context = browser.defaultBrowserContext();
 
         // Set up realistic permissions. 'geolocation' is deliberately NOT
@@ -746,6 +788,8 @@ const createSession = async (req, res) => {
             // configured, or the caller's proxy had no credentials to
             // anonymize (nothing to tear down in either case).
             anonymizedProxyUrl,
+            // Counters from helpers/directAssets.js, logged on close.
+            directAssetStats,
             config: {
                 headless,
                 width,

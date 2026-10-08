@@ -60,6 +60,10 @@ Creates a new browser instance and page, applies anti-detection settings, header
 }
 ```
 
+`proxyBypass` (optional): hosts Chrome fetches directly instead of through `proxy`, to save proxy bandwidth. Defaults to `DEFAULT_PROXY_BYPASS_HOSTS` in `config/proxyBypassHosts.js` (static CDNs, plus every image, CSS and video file by extension). Pass an array of Chrome bypass patterns (e.g. `["cdn.jsdelivr.net", "*.example-cdn.com"]`; Google-owned static hosts are in `GOOGLE_STATIC_HOSTS` and are opt-in) to replace it, or `false` to send everything through the proxy. Entries starting with `/` are URL path patterns instead of hosts (`*` wildcard, query string ignored, case-insensitive), e.g. `["/*.png", "/*.jpg", "/*.webp"]`: matching scripts, stylesheets, images, fonts and media are fetched directly by the server through `directAssets` (which must be on), **including the visited site's own assets** (so that site sees the server IP for them). Google, anti-bot and tracker hosts still stay on the proxy. Images, fonts and media are only covered when `allowMedia` is not `false`.
+
+`directAssets` (optional, default `true` unless `proxyBypass` is `false`): when a `proxy` is set, scripts, stylesheets, images, fonts and media from a *different site* than the page are downloaded by the server directly and handed to the browser, instead of going through the proxy. Requests always stay on the proxy when they are first-party (same site as the page, frame or referrer), Google-owned, anti-bot/captcha, analytics/ad-tech/consent (`config/directAssetRules.js`), or images with a query string (tracking pixels). Failed, redirected, non-200/206 or oversized (>25 MB) direct fetches fall back to the proxy. Set `DEBUG` in `helpers/directAssets.js` to `true` to log every asset served directly.
+
 ### Success response
 
 ```json
