@@ -67,6 +67,11 @@ const FETCH_METADATA = {
 // Analytics and ad beacons that arrive as images (Adobe /b/ss/, GA /collect,
 // Google /gen_204 and /pagead/, id-sync pixels).
 const BEACON_PATH_RE = /\/(b\/ss|collect|pixel|beacon|track|gen_204|ping|pagead|sync|setuid|rum|hit|tap\.php|cm|activity|conversion)(\/|\.|\?|$)/i;
+// Static files despite a query string, the same for every visitor: Google's
+// versioned JS/CSS bundles (Search /xjs/_/js/k=...?xjs=s1, Maps
+// /maps/_/js/k=..., /_/ss/k=...) and Google tag scripts (gtag/js?id=...,
+// gtm.js?id=..., also on a site's own server-side tagging host).
+const VERSIONED_BUNDLE_RE = /\/_\/(js|ss)\/k=|\/gtag\/js$|\/gtm\.js$/;
 
 // Same-origin/same-site/cross-site, as Chrome computes Sec-Fetch-Site.
 const fetchSiteOf = (pageUrl, requestUrl) => {
@@ -181,13 +186,15 @@ const enableDirectAssets = async (browser, { bypassHosts = [], bypassPaths = [],
         const frame = frameId ? await findFrame(frameId) : null;
         const fetchSite = fetchSiteOf(frame?.url() || getHeader(request.headers, 'referer'), request.url);
         const hasQuery = Boolean(url.search);
-        const staticPath = isBypassedPath(url.pathname);
+        const bundle = VERSIONED_BUNDLE_RE.test(url.pathname);
+        const staticPath = bundle || isBypassedPath(url.pathname);
         const tracking = isTrackingHost(url.hostname);
 
         if (PATH_ONLY_RESOURCE_TYPES.includes(resourceType)) {
-            return staticPath && !(hasQuery && tracking) ? fetchSite : null;
+            return bundle || (staticPath && !(hasQuery && tracking)) ? fetchSite : null;
         }
         if (resourceType === 'Script') {
+            if (bundle) return fetchSite;
             if (hasQuery && !staticPath) return null;
             // On Google/tracker hosts a .js URL with a long query is a
             // logging call (visit.js?gdpr=&brver=...), not a file; a short one
