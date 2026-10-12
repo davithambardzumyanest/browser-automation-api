@@ -1,11 +1,17 @@
-// Registrable domains (eTLD+1, or a suffix of one) whose assets must never be
-// fetched directly - they always go through the session proxy, even when
-// they are third-party to the page. See helpers/directAssets.js.
+// Rules for which static resources helpers/directAssets.js keeps on the
+// session proxy. Static files (scripts, styles, fonts, images, media) go
+// direct from every host; what stays on the proxy is:
+// - Anything from a captcha/anti-bot vendor, or on a challenge path
+//   (isAntiBotRequest). Their scripts are often generated per visitor and
+//   tied to the visitor's IP - fetching them from another IP can fail the
+//   check or flag the session.
+// - Dynamic requests on Google and tracker hosts (isTrackingHost): pixels,
+//   beacons and config endpoints carrying a query string. Their plain static
+//   files (gtm.js, fonts, CSS, images) still go direct.
 //
-// A match is the domain itself or any subdomain of it.
+// A domain matches itself or any subdomain of it.
 
-// Google-owned. Google could tie the server IP fetching these to the proxy
-// IP the same session searches from.
+// Google-owned.
 const GOOGLE_DOMAINS = [
     'google.com', 'gstatic.com', 'googleapis.com', 'googleusercontent.com',
     'googlesyndication.com', 'googleadservices.com', 'googletagmanager.com',
@@ -23,7 +29,7 @@ const GOOGLE_DOMAIN_RE = /(^|\.)google\.[a-z]{2,3}(\.[a-z]{2})?$|\.google$/;
 
 // Captcha, bot-detection and device-fingerprinting vendors. Their scripts
 // score the visitor; fetching them from another IP, or without Chrome's TLS
-// fingerprint, can fail the check or flag the session.
+// fingerprint, can fail the check or flag the session. Never direct.
 const ANTIBOT_DOMAINS = [
     'hcaptcha.com', 'challenges.cloudflare.com', 'cloudflareinsights.com',
     'arkoselabs.com', 'funcaptcha.com', 'perimeterx.net', 'px-cdn.net',
@@ -67,10 +73,17 @@ const TRACKER_DOMAINS = [
     'ipinfo.io', 'ipapi.co', 'nel.cloudflare.com'
 ];
 
-const NEVER_DIRECT_DOMAINS = [...GOOGLE_DOMAINS, ...ANTIBOT_DOMAINS, ...TRACKER_DOMAINS];
+// Challenge and bot-manager paths served from the visited site's own domain
+// (reCAPTCHA, Cloudflare, Akamai, Imperva).
+const ANTIBOT_PATH_RE = /\/(recaptcha|cdn-cgi|akam|_Incapsula_Resource|captcha)(\/|\.|$)/i;
 
-const isNeverDirectHost = (hostname) =>
-    GOOGLE_DOMAIN_RE.test(hostname) ||
-    NEVER_DIRECT_DOMAINS.some(domain => hostname === domain || hostname.endsWith(`.${domain}`));
+const matchesDomain = (hostname, domains) =>
+    domains.some(domain => hostname === domain || hostname.endsWith(`.${domain}`));
 
-module.exports = { GOOGLE_DOMAINS, ANTIBOT_DOMAINS, TRACKER_DOMAINS, isNeverDirectHost };
+const isAntiBotRequest = ({ hostname, pathname }) =>
+    matchesDomain(hostname, ANTIBOT_DOMAINS) || ANTIBOT_PATH_RE.test(pathname);
+
+const isTrackingHost = (hostname) =>
+    GOOGLE_DOMAIN_RE.test(hostname) || matchesDomain(hostname, [...GOOGLE_DOMAINS, ...TRACKER_DOMAINS]);
+
+module.exports = { GOOGLE_DOMAINS, ANTIBOT_DOMAINS, TRACKER_DOMAINS, isAntiBotRequest, isTrackingHost };

@@ -5,8 +5,9 @@
 //
 // Every host here sees the server's real IP instead of the proxy IP, so the
 // list is limited to neutral CDNs. Deliberately excluded:
-// - Anything Google owns (see GOOGLE_STATIC_HOSTS) - Google could tie the
-//   server IP to the proxy IP the same session searches from.
+// - Anything Google owns (see GOOGLE_STATIC_HOSTS). Google's static files go
+//   direct through helpers/directAssets.js instead, which keeps reCAPTCHA
+//   and Google's pixels on the proxy - a host-wide bypass here can't.
 // - Analytics / tag managers / ad pixels (google-analytics, googletagmanager,
 //   stats.wp.com, p.typekit.net, ...) - they report the visitor's IP.
 // - Captcha and anti-bot endpoints (recaptcha, hcaptcha, challenges.cloudflare.com).
@@ -21,11 +22,10 @@
 // against the request's path with "*" as a wildcard, e.g. "/*.png" or
 // "/*.woff2". Chrome's bypass list can only match hosts, so these are served
 // by helpers/directAssets.js instead (it fetches them directly and hands them
-// to the browser). Unlike the
-// automatic third-party rule there, a path pattern also applies to the
-// visited site's own assets, so that site sees the server IP for them.
-// Google, anti-bot and tracker hosts (config/directAssetRules.js) still
-// stay on the proxy. Needs directAssets on; only scripts, stylesheets,
+// to the browser). They mark a URL as a static file: it then goes direct
+// even as an "Other" request or with a query string.
+// Anti-bot hosts and tracker pixels (config/directAssetRules.js) still stay
+// on the proxy. Needs directAssets on; only scripts, stylesheets,
 // (unless allowMedia is false) images, fonts and media, and requests Chrome
 // types as "Other" (preloads, prefetches, favicons) are covered.
 const DEFAULT_PROXY_BYPASS_HOSTS = [

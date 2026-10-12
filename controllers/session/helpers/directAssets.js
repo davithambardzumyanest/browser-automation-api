@@ -1,6 +1,7 @@
-// Proxy bandwidth saving: fetch third-party static assets (scripts,
-// stylesheets, images, fonts, media) directly from this server instead of
-// through the session's proxy.
+// Proxy bandwidth saving: fetch static resources (scripts, stylesheets,
+// images, fonts, media) directly from this server instead of through the
+// session's proxy. Pages, XHR/fetch API calls and form posts stay on the
+// proxy; resources are most of a page's bytes.
 //
 // Chrome's --proxy-bypass-list (config/proxyBypassHosts.js) can only route by
 // host, so this works one level up: requests of those resource types are
@@ -8,32 +9,29 @@
 // helpers/mediaBlocking.js, so every tab is covered from its first request),
 // downloaded here with Node's fetch, and handed back with Fetch.fulfillRequest.
 //
-// A request only goes direct when ALL of these hold - otherwise it is
-// continued untouched through the proxy:
-// - Its site (eTLD+1) differs from the top-level page's site, the requesting
-//   frame's site and the Referer's site. The site being visited never sees
-//   the server IP.
-// - Its host is not Google-owned, an anti-bot/captcha vendor or a tracker
-//   (config/directAssetRules.js).
-// - Its host is not already on the Chrome bypass list (Chrome fetches those
-//   directly itself, with its own TLS stack - better than ours).
-// - It is a plain GET with no cookies attached. Chrome adds cookies below
-//   the Fetch layer, so a paused request never carries them and the direct
-//   fetch sends none.
-// Exception: a request whose URL path matches one of the session's path
-// patterns ("/*.png" entries of proxyBypass, see config/proxyBypassHosts.js)
-// goes direct even when it is first-party or has a query string. The other
-// rules still apply to it.
+// Every GET of those types goes direct, from any host, first-party included,
+// except (see directFetchSite):
+// - captcha/anti-bot vendors and challenge paths (config/directAssetRules.js),
+// - hosts already on the Chrome bypass list (Chrome fetches those directly
+//   itself, with its own TLS stack),
+// - requests that look dynamic rather than static: a script with a query
+//   string and no static file extension (config endpoints, ad verification),
+//   and tracking pixels - cross-site images with a query string and no image
+//   extension, or any image on a beacon path,
+// - "Other" requests (preloads, prefetches, favicons) that don't match a
+//   proxyBypass path pattern ("/*.js", "/*.ico", ...).
+// Paused requests carry no cookies (Chrome adds them below the Fetch layer)
+// and the direct fetch sends none.
 // If the direct fetch fails, times out, redirects, answers anything other
 // than 200/206 or is larger than MAX_DIRECT_BYTES, the request falls back to
 // the proxy, so a page never breaks because of this.
 //
-// Residual differences a third-party CDN could see: Node's TLS fingerprint
-// instead of Chrome's, and no cookies. The page itself can see fulfilled
-// requests in the Resource Timing API (no connection timing), which is why
-// first-party and anti-bot requests are excluded.
+// What a server can see: the server IP instead of the proxy IP for these
+// files, Node's TLS fingerprint instead of Chrome's, and no cookies. The page
+// itself can see fulfilled requests in the Resource Timing API (no
+// connection timing).
 const { getDomain } = require('tldts');
-const { isNeverDirectHost } = require('../../../config/directAssetRules');
+const { isAntiBotRequest, isTrackingHost } = require('../../../config/directAssetRules');
 
 const DIRECT_RESOURCE_TYPES = ['Script', 'Stylesheet', 'Image', 'Font', 'Media'];
 // What Chrome types <link rel=modulepreload/prefetch>, speculation-rule
@@ -66,6 +64,22 @@ const FETCH_METADATA = {
 // Fetch metadata for an "Other" request, from what it fetches: a
 // modulepreload of a script is cors/script, a favicon no-cors/image. A
 // prefetch (Sec-Purpose header) is always dest empty.
+// Analytics and ad beacons that arrive as images (Adobe /b/ss/, GA /collect,
+// Google /gen_204 and /pagead/, id-sync pixels).
+const BEACON_PATH_RE = /\/(b\/ss|collect|pixel|beacon|track|gen_204|ping|pagead|sync|setuid|rum|hit|tap\.php|cm|activity|conversion)(\/|\.|\?|$)/i;
+
+// Same-origin/same-site/cross-site, as Chrome computes Sec-Fetch-Site.
+const fetchSiteOf = (pageUrl, requestUrl) => {
+    try {
+        const page = new URL(pageUrl);
+        const target = new URL(requestUrl);
+        if (page.origin === target.origin) return 'same-origin';
+        return siteOf(pageUrl) === siteOf(requestUrl) ? 'same-site' : 'cross-site';
+    } catch (_) {
+        return 'cross-site';
+    }
+};
+
 const otherFetchMetadata = (pathname, headers) => {
     if (getHeader(headers, 'sec-purpose')) return { dest: 'empty', mode: 'no-cors' };
     if (/\.m?js$/i.test(pathname)) return { dest: 'script', mode: 'cors' };
@@ -115,8 +129,8 @@ const readBody = async (response) => {
 };
 
 /**
- * Serve third-party static assets directly instead of through the proxy,
- * across every tab of the browser.
+ * Serve static resources directly instead of through the proxy, across every
+ * tab of the browser.
  *
  * @param {Object} browser - Puppeteer browser
  * @param {Object} options
@@ -150,36 +164,47 @@ const enableDirectAssets = async (browser, { bypassHosts = [], bypassPaths = [],
         return frames.get(frameId) || null;
     };
 
-    // Decide from the paused event whether this request may go direct.
-    const isDirectCandidate = async ({ request, resourceType, frameId }) => {
-        if (request.method !== 'GET' || !interceptedTypes.includes(resourceType)) return false;
+    // Decide from the paused event whether this request goes direct: the
+    // Sec-Fetch-Site value to send with it, or null to keep it on the proxy.
+    const directFetchSite = async ({ request, resourceType, frameId }) => {
+        if (request.method !== 'GET' || !interceptedTypes.includes(resourceType)) return null;
 
-        let hostname, pathname;
+        let url;
         try {
-            const url = new URL(request.url);
-            if (url.protocol !== 'https:' && url.protocol !== 'http:') return false;
-            ({ hostname, pathname } = url);
+            url = new URL(request.url);
         } catch (_) {
-            return false;
+            return null;
         }
-        if (isBypassed(hostname) || isNeverDirectHost(hostname)) return false;
-        if (isBypassedPath(pathname)) return true;
-        if (PATH_ONLY_RESOURCE_TYPES.includes(resourceType)) return false;
-        // Tracking and ID-sync pixels are images carrying a query string;
-        // real images on third-party CDNs rarely need one.
-        if (resourceType === 'Image' && new URL(request.url).search) return false;
+        if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
+        if (isBypassed(url.hostname) || isAntiBotRequest(url)) return null;
 
         const frame = frameId ? await findFrame(frameId) : null;
-        if (!frame) return false;
-        const pageSites = [frame.page().mainFrame().url(), frame.url(), getHeader(request.headers, 'referer')]
-            .map(url => url && siteOf(url));
-        if (!pageSites[0] || !pageSites[1]) return false;
+        const fetchSite = fetchSiteOf(frame?.url() || getHeader(request.headers, 'referer'), request.url);
+        const hasQuery = Boolean(url.search);
+        const staticPath = isBypassedPath(url.pathname);
+        const tracking = isTrackingHost(url.hostname);
 
-        const assetSite = siteOf(request.url);
-        return !pageSites.includes(assetSite);
+        if (PATH_ONLY_RESOURCE_TYPES.includes(resourceType)) {
+            return staticPath && !(hasQuery && tracking) ? fetchSite : null;
+        }
+        if (resourceType === 'Script') {
+            if (hasQuery && !staticPath) return null;
+            // On Google/tracker hosts a .js URL with a long query is a
+            // logging call (visit.js?gdpr=&brver=...), not a file; a short one
+            // is a versioned file (gtm.js?id=, pubads_impl.js?cb=).
+            if (hasQuery && tracking && [...url.searchParams.keys()].length > 2) return null;
+            return fetchSite;
+        }
+        if (resourceType === 'Image') {
+            if (BEACON_PATH_RE.test(url.pathname)) return null;
+            if (hasQuery && fetchSite === 'cross-site' && (tracking || !staticPath)) return null;
+            return fetchSite;
+        }
+        // Stylesheet, Font, Media
+        return fetchSite;
     };
 
-    const fetchDirect = async ({ request, resourceType }) => {
+    const fetchDirect = async ({ request, resourceType }, fetchSite) => {
         const headers = {};
         for (const [name, value] of Object.entries(request.headers || {})) {
             if (!DROPPED_REQUEST_HEADERS.has(name.toLowerCase())) headers[name] = value;
@@ -187,7 +212,7 @@ const enableDirectAssets = async (browser, { bypassHosts = [], bypassPaths = [],
         const metadata = FETCH_METADATA[resourceType]
             || otherFetchMetadata(new URL(request.url).pathname, request.headers);
         Object.assign(headers, clientHints, {
-            'Sec-Fetch-Site': 'cross-site',
+            'Sec-Fetch-Site': fetchSite,
             'Sec-Fetch-Mode': metadata.mode,
             'Sec-Fetch-Dest': metadata.dest
         });
@@ -215,8 +240,9 @@ const enableDirectAssets = async (browser, { bypassHosts = [], bypassPaths = [],
     cdp.on('Fetch.requestPaused', async (event) => {
         let direct = null;
         try {
-            if (await isDirectCandidate(event)) {
-                direct = await fetchDirect(event).catch(error => ({ fallback: error.cause?.code || error.message }));
+            const fetchSite = await directFetchSite(event);
+            if (fetchSite) {
+                direct = await fetchDirect(event, fetchSite).catch(error => ({ fallback: error.cause?.code || error.message }));
                 if (DEBUG) console.log(`[direct-asset] ${direct.fallback ? `fallback (${direct.fallback})` : `direct ${direct.status}`} ${event.resourceType} ${event.request.url}`);
                 if (direct.fallback) {
                     stats.fallbacks++;
