@@ -25,8 +25,9 @@
 // automatic third-party rule there, a path pattern also applies to the
 // visited site's own assets, so that site sees the server IP for them.
 // Google, anti-bot and tracker hosts (config/directAssetRules.js) still
-// stay on the proxy. Needs directAssets on; only scripts, stylesheets and
-// (unless allowMedia is false) images, fonts and media are covered.
+// stay on the proxy. Needs directAssets on; only scripts, stylesheets,
+// (unless allowMedia is false) images, fonts and media, and requests Chrome
+// types as "Other" (preloads, prefetches, favicons) are covered.
 const DEFAULT_PROXY_BYPASS_HOSTS = [
     // Public JS/CSS library CDNs
     'cdnjs.cloudflare.com',
@@ -79,7 +80,16 @@ const DEFAULT_PROXY_BYPASS_HOSTS = [
     '/*.webm',
     '/*.mov',
     '/*.m4v',
-    '/*.ogv'
+    '/*.ogv',
+    // Site JS bundles (mostly hashed, versioned build output) - the largest
+    // proxied static item measured across typical sites.
+    '/*.js',
+    '/*.mjs',
+    // Font files
+    '/*.woff2',
+    '/*.woff',
+    '/*.ttf',
+    '/*.otf'
 ];
 
 // Google-owned static hosts. Big savings (Google's JS bundles, fonts, image

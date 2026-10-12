@@ -36,6 +36,11 @@ const { getDomain } = require('tldts');
 const { isNeverDirectHost } = require('../../../config/directAssetRules');
 
 const DIRECT_RESOURCE_TYPES = ['Script', 'Stylesheet', 'Image', 'Font', 'Media'];
+// What Chrome types <link rel=modulepreload/prefetch>, speculation-rule
+// prefetches and favicons as. Too broad to send direct on the third-party
+// rule alone (beacons and odd fetches land here too), so only taken when the
+// URL matches a proxyBypass path pattern ("/*.js", "/*.ico", ...).
+const PATH_ONLY_RESOURCE_TYPES = ['Other'];
 const MEDIA_RESOURCE_TYPES = ['Image', 'Font', 'Media'];
 
 const DIRECT_TIMEOUT_MS = 20000;
@@ -56,6 +61,18 @@ const FETCH_METADATA = {
     Image: { dest: 'image', mode: 'no-cors' },
     Font: { dest: 'font', mode: 'cors' },
     Media: { dest: 'video', mode: 'no-cors' }
+};
+
+// Fetch metadata for an "Other" request, from what it fetches: a
+// modulepreload of a script is cors/script, a favicon no-cors/image. A
+// prefetch (Sec-Purpose header) is always dest empty.
+const otherFetchMetadata = (pathname, headers) => {
+    if (getHeader(headers, 'sec-purpose')) return { dest: 'empty', mode: 'no-cors' };
+    if (/\.m?js$/i.test(pathname)) return { dest: 'script', mode: 'cors' };
+    if (/\.css$/i.test(pathname)) return { dest: 'style', mode: 'no-cors' };
+    if (/\.(woff2?|ttf|otf)$/i.test(pathname)) return { dest: 'font', mode: 'cors' };
+    if (/\.(png|jpe?g|gif|webp|avif|svg|ico)$/i.test(pathname)) return { dest: 'image', mode: 'no-cors' };
+    return { dest: 'empty', mode: 'no-cors' };
 };
 
 const siteOf = (url) => {
@@ -119,6 +136,7 @@ const enableDirectAssets = async (browser, { bypassHosts = [], bypassPaths = [],
     const resourceTypes = allowMedia
         ? DIRECT_RESOURCE_TYPES
         : DIRECT_RESOURCE_TYPES.filter(type => !MEDIA_RESOURCE_TYPES.includes(type));
+    const interceptedTypes = bypassPaths.length ? [...resourceTypes, ...PATH_ONLY_RESOURCE_TYPES] : resourceTypes;
 
     // frameId -> Puppeteer Frame, rebuilt from browser.pages() on a miss.
     let frames = new Map();
@@ -134,7 +152,7 @@ const enableDirectAssets = async (browser, { bypassHosts = [], bypassPaths = [],
 
     // Decide from the paused event whether this request may go direct.
     const isDirectCandidate = async ({ request, resourceType, frameId }) => {
-        if (request.method !== 'GET' || !resourceTypes.includes(resourceType)) return false;
+        if (request.method !== 'GET' || !interceptedTypes.includes(resourceType)) return false;
 
         let hostname, pathname;
         try {
@@ -146,6 +164,7 @@ const enableDirectAssets = async (browser, { bypassHosts = [], bypassPaths = [],
         }
         if (isBypassed(hostname) || isNeverDirectHost(hostname)) return false;
         if (isBypassedPath(pathname)) return true;
+        if (PATH_ONLY_RESOURCE_TYPES.includes(resourceType)) return false;
         // Tracking and ID-sync pixels are images carrying a query string;
         // real images on third-party CDNs rarely need one.
         if (resourceType === 'Image' && new URL(request.url).search) return false;
@@ -165,7 +184,8 @@ const enableDirectAssets = async (browser, { bypassHosts = [], bypassPaths = [],
         for (const [name, value] of Object.entries(request.headers || {})) {
             if (!DROPPED_REQUEST_HEADERS.has(name.toLowerCase())) headers[name] = value;
         }
-        const metadata = FETCH_METADATA[resourceType];
+        const metadata = FETCH_METADATA[resourceType]
+            || otherFetchMetadata(new URL(request.url).pathname, request.headers);
         Object.assign(headers, clientHints, {
             'Sec-Fetch-Site': 'cross-site',
             'Sec-Fetch-Mode': metadata.mode,
@@ -228,7 +248,7 @@ const enableDirectAssets = async (browser, { bypassHosts = [], bypassPaths = [],
         }
     });
     await cdp.send('Fetch.enable', {
-        patterns: resourceTypes.map(resourceType => ({ urlPattern: '*', resourceType }))
+        patterns: interceptedTypes.map(resourceType => ({ urlPattern: '*', resourceType }))
     });
 
     return stats;
