@@ -307,18 +307,24 @@ Take a screenshot of the current page. This will always capture the first tab if
 ```json
 {
   "fullPage": true,
-  "quality": 80,
-  "type": "png"
+  "quality": 70,
+  "type": "jpeg"
 }
 ```
 
 **Parameters:**
-- `fullPage` (boolean, optional, default: false) - Capture the full scrollable page
-- `quality` (number, optional, default: 80) - Image quality (0-100) for JPEG
-- `type` (string, optional, default: 'png') - Image format ('png' or 'jpeg')
-- `selector` (string, optional) - CSS selector to capture specific element
+- `fullPage` (boolean, optional, default: true) - Capture the full scrollable page (ignored when `selector` is set)
+- `quality` (number, optional, default: 70) - Image quality (1-100) for JPEG/WebP; ignored for PNG
+- `type` (string, optional, default: 'jpeg') - Image format: 'jpeg' (or 'jpg'), 'webp' or 'png'
+- `selector` (string, optional) - CSS selector to capture specific element (404 if nothing matches)
 
-**Response:** Image file (PNG/JPEG)
+JPEG is the default because it is 2-6x smaller than PNG on typical pages. WebP is about
+25% smaller again, but it cannot exceed 16383px per side, so a taller full-page WebP
+capture falls back to JPEG automatically. Check the response `Content-Type` for the
+format actually returned. Use `"type": "png"` when you need lossless output.
+
+**Response:** Image file (`image/jpeg`, `image/webp` or `image/png`). An invalid `type` or
+`quality` returns 400.
 
 #### 8. Execute JavaScript
 ```
@@ -896,7 +902,7 @@ curl -X POST http://localhost:3000/api/session/$SESSION_ID/execute \
 curl -X POST http://localhost:3000/api/session/$SESSION_ID/screenshot \
   -H "Content-Type: application/json" \
   -d '{"fullPage": false}' \
-  --output result.png
+  --output result.jpg
 
 # 7. Close session
 curl -X DELETE http://localhost:3000/api/session/$SESSION_ID

@@ -274,19 +274,28 @@ Reloads the current page and returns updated title/url metadata.
 
 **POST** `/:sessionId/screenshot`
 
-Waits briefly for dynamic content and returns a PNG screenshot binary.
+Waits briefly for dynamic content and returns a screenshot binary (JPEG by default).
 
 ### Request body (example)
 
 ```json
 {
-  "fullPage": true
+  "fullPage": true,
+  "type": "jpeg",
+  "quality": 70
 }
 ```
 
+- `fullPage` (default `true`) - capture the full scrollable page; ignored with `selector`
+- `type` (default `"jpeg"`) - `"jpeg"`/`"jpg"`, `"webp"` or `"png"`
+- `quality` (default `70`) - 1-100, JPEG/WebP only
+- `selector` (optional) - capture only the first matching element (404 if none)
+
+WebP cannot exceed 16383px per side, so taller full-page WebP captures fall back to JPEG.
+
 ### Success response
 
-- Content-Type: `image/png`
+- Content-Type: `image/jpeg`, `image/webp` or `image/png` (the format actually returned)
 - Body: binary image data
 
 ### Error response
