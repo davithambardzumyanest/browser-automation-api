@@ -24,7 +24,7 @@ const { getProxyCredentials, stripProxyCredentials, applyProxyAuth, buildAuthent
 const proxyChain = require('proxy-chain');
 const { installProtocolGuard, DEFAULT_BLOCKED_SCHEMES } = require('./dismissProtocolDialog');
 const { detectProxyGeo } = require('../helpers/geoip');
-const { enableMediaBlocking } = require('../helpers/mediaBlocking');
+const { enableRequestBlocking } = require('../helpers/requestBlocking');
 const { DEFAULT_PROXY_BYPASS_HOSTS, splitProxyBypass } = require('../../../config/proxyBypassHosts');
 const { enableDirectAssets } = require('../helpers/directAssets');
 
@@ -418,10 +418,7 @@ const createSession = async (req, res) => {
         // the reCAPTCHA challenge stop appearing.
         const browser = await puppeteer.launch(launchOptions);
         // Before any page exists, so every tab is covered from its first
-        // request - see helpers/mediaBlocking.js.
-        if (!allowMedia) {
-            await enableMediaBlocking(browser);
-        }
+        // request - see helpers/requestBlocking.js.
         const directAssetStats = proxy && directAssets
             ? await enableDirectAssets(browser, {
                 bypassHosts: splitProxyBypass(proxyBypass).hosts,
@@ -434,6 +431,10 @@ const createSession = async (req, res) => {
                 allowMedia
             })
             : null;
+        // After enableDirectAssets: Chrome pauses a request on the Fetch
+        // session enabled last first, so ads are blocked before they could be
+        // fetched direct (a continued request then reaches directAssets).
+        await enableRequestBlocking(browser, { allowMedia });
         const context = browser.defaultBrowserContext();
 
         // Set up realistic permissions. 'geolocation' is deliberately NOT

@@ -13,8 +13,8 @@ const closeSession = async (sessionId) => {
         sessions.delete(sessionId);
 
         const { directAssetStats } = session;
-        if (directAssetStats?.requests || directAssetStats?.fallbacks) {
-            console.log(`Session ${sessionId}: ${directAssetStats.requests} assets (${(directAssetStats.bytes / 1024 / 1024).toFixed(2)} MB) fetched without the proxy, ${directAssetStats.fallbacks} fell back to it`);
+        if (directAssetStats?.requests || directAssetStats?.fallbacks || directAssetStats?.blocked) {
+            console.log(`Session ${sessionId}: ${directAssetStats.requests} assets (${(directAssetStats.bytes / 1024 / 1024).toFixed(2)} MB) fetched without the proxy, ${directAssetStats.fallbacks} fell back to it, ${directAssetStats.blocked} media blocked instead`);
         }
 
         // Local proxy-chain forwarding server started in createSession.js -

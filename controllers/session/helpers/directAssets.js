@@ -6,7 +6,7 @@
 // Chrome's --proxy-bypass-list (config/proxyBypassHosts.js) can only route by
 // host, so this works one level up: requests of those resource types are
 // paused on a browser-level CDP Fetch session (same approach as
-// helpers/mediaBlocking.js, so every tab is covered from its first request),
+// helpers/requestBlocking.js, so every tab is covered from its first request),
 // downloaded here with Node's fetch, and handed back with Fetch.fulfillRequest.
 //
 // Every GET of those types goes direct, from any host, first-party included,
@@ -26,6 +26,14 @@
 // than 200/206 or is larger than MAX_DIRECT_BYTES, the request falls back to
 // the proxy, so a page never breaks because of this.
 //
+// Images, fonts and media are the exception: an allowMedia:false session
+// blocks them outright, so an allowMedia:true session must not spend proxy
+// bandwidth on them either. They never fall back - a tracking pixel that
+// would stay on the proxy, or a file whose direct fetch fails, is blocked
+// instead (MEDIA_BLOCKED). A redirect is handed to Chrome, which follows it
+// and pauses the next hop here again. Only anti-bot requests (captcha image
+// tiles) still use the proxy, as they must.
+//
 // What a server can see: the server IP instead of the proxy IP for these
 // files, Node's TLS fingerprint instead of Chrome's, and no cookies. The page
 // itself can see fulfilled requests in the Resource Timing API (no
@@ -40,14 +48,28 @@ const DIRECT_RESOURCE_TYPES = ['Script', 'Stylesheet', 'Image', 'Font', 'Media']
 // URL matches a proxyBypass path pattern ("/*.js", "/*.ico", ...).
 const PATH_ONLY_RESOURCE_TYPES = ['Other'];
 const MEDIA_RESOURCE_TYPES = ['Image', 'Font', 'Media'];
+// directFetchSite's answer for an image that would otherwise stay on the
+// proxy (see the header note).
+const MEDIA_BLOCKED = Symbol('media blocked');
+// Google image hosts whose query strings are signatures/sizes on a real
+// image, not tracking (search thumbnails encrypted-tbn0.gstatic.com/images?q=,
+// YouTube thumbnails i.ytimg.com/vi/...?sqp=).
+const GOOGLE_IMAGE_HOST_RE = /^(encrypted-tbn\d+\.gstatic\.com|i\d?\.ytimg\.com|[\w-]+\.googleusercontent\.com|yt\d\.ggpht\.com)$/;
+const REDIRECT_STATUSES = [301, 302, 303, 307, 308];
 
 const DIRECT_TIMEOUT_MS = 20000;
 const MAX_DIRECT_BYTES = 25 * 1024 * 1024;
+// Media asks for "bytes=N-" (the rest of the file). Capped to this much per
+// request so a large video fits under MAX_DIRECT_BYTES; Chrome's media
+// loader requests the next range itself.
+const MEDIA_RANGE_BYTES = 8 * 1024 * 1024;
 // Log every asset served directly / fallen back, to audit what skips the proxy.
 const DEBUG = false;
 
 // Request headers Node's fetch sets itself or refuses.
-const DROPPED_REQUEST_HEADERS = new Set(['host', 'connection', 'content-length', 'keep-alive', 'transfer-encoding', 'upgrade', 'accept-encoding', 'cookie']);
+// Conditional headers too: a 304 answer can't be handed to Chrome, and would
+// send the request to the proxy.
+const DROPPED_REQUEST_HEADERS = new Set(['host', 'connection', 'content-length', 'keep-alive', 'transfer-encoding', 'upgrade', 'accept-encoding', 'cookie', 'if-none-match', 'if-modified-since']);
 // Response headers that describe the wire encoding Node already undid.
 const DROPPED_RESPONSE_HEADERS = new Set(['content-encoding', 'content-length', 'transfer-encoding', 'connection', 'keep-alive']);
 
@@ -144,12 +166,12 @@ const readBody = async (response) => {
  *   directly, first-party included
  * @param {Object} [options.clientHints] - sec-ch-ua headers Chrome would send
  * @param {boolean} [options.allowMedia=true] - false leaves images, fonts and
- *   media to helpers/mediaBlocking.js
- * @returns {Promise<{requests: number, bytes: number, fallbacks: number}>}
+ *   media to helpers/requestBlocking.js
+ * @returns {Promise<{requests: number, bytes: number, fallbacks: number, blocked: number}>}
  *   live counters for this browser
  */
 const enableDirectAssets = async (browser, { bypassHosts = [], bypassPaths = [], clientHints = {}, allowMedia = true } = {}) => {
-    const stats = { requests: 0, bytes: 0, fallbacks: 0 };
+    const stats = { requests: 0, bytes: 0, fallbacks: 0, blocked: 0 };
     const isBypassed = buildGlobMatcher(bypassHosts);
     const isBypassedPath = buildGlobMatcher(bypassPaths);
     const resourceTypes = allowMedia
@@ -170,7 +192,8 @@ const enableDirectAssets = async (browser, { bypassHosts = [], bypassPaths = [],
     };
 
     // Decide from the paused event whether this request goes direct: the
-    // Sec-Fetch-Site value to send with it, or null to keep it on the proxy.
+    // Sec-Fetch-Site value to send with it, null to keep it on the proxy, or
+    // MEDIA_BLOCKED.
     const directFetchSite = async ({ request, resourceType, frameId }) => {
         if (request.method !== 'GET' || !interceptedTypes.includes(resourceType)) return null;
 
@@ -203,8 +226,9 @@ const enableDirectAssets = async (browser, { bypassHosts = [], bypassPaths = [],
             return fetchSite;
         }
         if (resourceType === 'Image') {
-            if (BEACON_PATH_RE.test(url.pathname)) return null;
-            if (hasQuery && fetchSite === 'cross-site' && (tracking || !staticPath)) return null;
+            if (BEACON_PATH_RE.test(url.pathname)) return MEDIA_BLOCKED;
+            if (GOOGLE_IMAGE_HOST_RE.test(url.hostname)) return fetchSite;
+            if (hasQuery && fetchSite === 'cross-site' && (tracking || !staticPath)) return MEDIA_BLOCKED;
             return fetchSite;
         }
         // Stylesheet, Font, Media
@@ -223,12 +247,28 @@ const enableDirectAssets = async (browser, { bypassHosts = [], bypassPaths = [],
             'Sec-Fetch-Mode': metadata.mode,
             'Sec-Fetch-Dest': metadata.dest
         });
+        if (resourceType === 'Media') {
+            const rangeHeader = Object.keys(headers).find(name => name.toLowerCase() === 'range');
+            const openRange = rangeHeader && /^bytes=(\d+)-$/.exec(headers[rangeHeader]);
+            if (openRange) {
+                const start = Number(openRange[1]);
+                headers[rangeHeader] = `bytes=${start}-${start + MEDIA_RANGE_BYTES - 1}`;
+            }
+        }
 
         const response = await fetch(request.url, {
             headers,
             redirect: 'manual',
             signal: AbortSignal.timeout(DIRECT_TIMEOUT_MS)
         });
+        const responseHeaders = [];
+        for (const [name, value] of response.headers) {
+            if (!DROPPED_RESPONSE_HEADERS.has(name.toLowerCase())) responseHeaders.push({ name, value });
+        }
+        if (MEDIA_RESOURCE_TYPES.includes(resourceType) && REDIRECT_STATUSES.includes(response.status) && response.headers.has('location')) {
+            response.body?.cancel().catch(() => {});
+            return { status: response.status, headers: responseHeaders, body: Buffer.alloc(0) };
+        }
         if (response.status !== 200 && response.status !== 206) {
             response.body?.cancel().catch(() => {});
             return { fallback: `status ${response.status}` };
@@ -236,24 +276,28 @@ const enableDirectAssets = async (browser, { bypassHosts = [], bypassPaths = [],
         const body = await readBody(response);
         if (!body) return { fallback: 'too large' };
 
-        const responseHeaders = [];
-        for (const [name, value] of response.headers) {
-            if (!DROPPED_RESPONSE_HEADERS.has(name.toLowerCase())) responseHeaders.push({ name, value });
-        }
         return { status: response.status, headers: responseHeaders, body };
     };
 
     const cdp = await browser.target().createCDPSession();
     cdp.on('Fetch.requestPaused', async (event) => {
         let direct = null;
+        let blocked = false;
         try {
             const fetchSite = await directFetchSite(event);
-            if (fetchSite) {
+            if (fetchSite === MEDIA_BLOCKED) {
+                blocked = true;
+                if (DEBUG) console.log(`[direct-asset] blocked ${event.resourceType} ${event.request.url}`);
+            } else if (fetchSite) {
                 direct = await fetchDirect(event, fetchSite).catch(error => ({ fallback: error.cause?.code || error.message }));
-                if (DEBUG) console.log(`[direct-asset] ${direct.fallback ? `fallback (${direct.fallback})` : `direct ${direct.status}`} ${event.resourceType} ${event.request.url}`);
                 if (direct.fallback) {
-                    stats.fallbacks++;
+                    // See the header note: media never falls back.
+                    blocked = MEDIA_RESOURCE_TYPES.includes(event.resourceType);
+                    if (DEBUG) console.log(`[direct-asset] ${blocked ? 'blocked' : 'fallback'} (${direct.fallback}) ${event.resourceType} ${event.request.url}`);
+                    if (!blocked) stats.fallbacks++;
                     direct = null;
+                } else if (DEBUG) {
+                    console.log(`[direct-asset] direct ${direct.status} ${event.resourceType} ${event.request.url}`);
                 }
             }
         } catch (error) {
@@ -261,7 +305,10 @@ const enableDirectAssets = async (browser, { bypassHosts = [], bypassPaths = [],
         }
 
         try {
-            if (direct) {
+            if (blocked) {
+                await cdp.send('Fetch.failRequest', { requestId: event.requestId, errorReason: 'BlockedByClient' });
+                stats.blocked++;
+            } else if (direct) {
                 await cdp.send('Fetch.fulfillRequest', {
                     requestId: event.requestId,
                     responseCode: direct.status,

@@ -1,4 +1,7 @@
-// Bandwidth saving for allowMedia:false sessions.
+// Proxy bandwidth saving: requests a session never needs are aborted before
+// they leave the browser. Ads, beacons and prefetches are blocked in every
+// session; images, fonts and media only in allowMedia:false sessions (with
+// allowMedia:true they go direct instead - see helpers/directAssets.js).
 //
 // Interception runs on a single browser-level CDP session instead of per page
 // (page.setRequestInterception). Two reasons:
@@ -13,12 +16,14 @@
 //   ANTI_DETECTION_TROUBLESHOOTING.md #2 and #21).
 const { BLOCKED_REQUEST_PATTERNS } = require('../../../config/blockedRequestPatterns');
 
-// Always aborted. Beyond the heavy media types, Ping (beacons) carries nothing
-// the session needs. Chrome's Fetch filter rejects TextTrack, Manifest,
-// Prefetch, EventSource and WebSocket as resource types (Fetch.enable fails
-// outright, and with it session creation); subtitles and manifests are tiny,
-// and prefetches are caught via 'Other' below.
-const BLOCKED_RESOURCE_TYPES = ['Image', 'Font', 'Media', 'Ping'];
+// Always aborted: Ping (beacons) carries nothing the session needs. Chrome's
+// Fetch filter rejects TextTrack, Manifest, Prefetch, EventSource and
+// WebSocket as resource types (Fetch.enable fails outright, and with it
+// session creation); subtitles and manifests are tiny, and prefetches are
+// caught via 'Other' below.
+const ALWAYS_BLOCKED_RESOURCE_TYPES = ['Ping'];
+// Also aborted when media is blocked.
+const MEDIA_RESOURCE_TYPES = ['Image', 'Font', 'Media'];
 
 // Subresource types aborted when the URL matches BLOCKED_REQUEST_PATTERNS.
 // Document is deliberately absent: clicking a link that routes through one of
@@ -41,27 +46,34 @@ const isSpeculative = (headers) => {
 
 const isAdRequest = (url) => BLOCKED_REQUEST_PATTERNS.some(pattern => url.includes(pattern));
 
-const buildPatterns = () => [
-    ...BLOCKED_RESOURCE_TYPES.map(resourceType => ({ urlPattern: '*', resourceType })),
+const buildPatterns = (blockedTypes) => [
+    ...blockedTypes.map(resourceType => ({ urlPattern: '*', resourceType })),
     ...BLOCKED_REQUEST_PATTERNS.flatMap(pattern =>
         AD_RESOURCE_TYPES.map(resourceType => ({ urlPattern: `*${pattern}*`, resourceType }))
     ),
     ...INSPECTED_RESOURCE_TYPES.map(resourceType => ({ urlPattern: '*', resourceType }))
 ];
 
-const shouldBlock = ({ resourceType, request }) => {
-    if (BLOCKED_RESOURCE_TYPES.includes(resourceType)) return true;
-    if (INSPECTED_RESOURCE_TYPES.includes(resourceType)) return isSpeculative(request.headers) || isAdRequest(request.url);
-    return AD_RESOURCE_TYPES.includes(resourceType) && isAdRequest(request.url);
-};
-
 /**
- * Block media, fonts, prefetches and ad/tracking subresources across every
- * tab of the browser.
+ * Block ads, beacons and prefetches (and, unless allowMedia, media and
+ * fonts) across every tab of the browser.
  *
  * @param {Object} browser - Puppeteer browser
+ * @param {Object} [options]
+ * @param {boolean} [options.allowMedia=true] - false also blocks images,
+ *   fonts and media
  */
-const enableMediaBlocking = async (browser) => {
+const enableRequestBlocking = async (browser, { allowMedia = true } = {}) => {
+    const blockedTypes = allowMedia
+        ? ALWAYS_BLOCKED_RESOURCE_TYPES
+        : [...MEDIA_RESOURCE_TYPES, ...ALWAYS_BLOCKED_RESOURCE_TYPES];
+
+    const shouldBlock = ({ resourceType, request }) => {
+        if (blockedTypes.includes(resourceType)) return true;
+        if (INSPECTED_RESOURCE_TYPES.includes(resourceType)) return isSpeculative(request.headers) || isAdRequest(request.url);
+        return AD_RESOURCE_TYPES.includes(resourceType) && isAdRequest(request.url);
+    };
+
     const cdp = await browser.target().createCDPSession();
     cdp.on('Fetch.requestPaused', async (event) => {
         try {
@@ -73,11 +85,11 @@ const enableMediaBlocking = async (browser) => {
         } catch (error) {
             // The tab or request is gone (closed page, cancelled navigation).
             if (!/Invalid InterceptionId|Target closed|Session closed/i.test(error.message)) {
-                console.error('Media blocking error:', error.message);
+                console.error('Request blocking error:', error.message);
             }
         }
     });
-    await cdp.send('Fetch.enable', { patterns: buildPatterns() });
+    await cdp.send('Fetch.enable', { patterns: buildPatterns(blockedTypes) });
 };
 
-module.exports = { enableMediaBlocking };
+module.exports = { enableRequestBlocking };
