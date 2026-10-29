@@ -15,6 +15,7 @@
 //   the document header rewrite page-level interception required (see
 //   ANTI_DETECTION_TROUBLESHOOTING.md #2 and #21).
 const { BLOCKED_REQUEST_PATTERNS } = require('../../../config/blockedRequestPatterns');
+const { MEDIA_RESOURCE_TYPES, FORWARDED_RESOURCE_TYPES, mediaTypeOf } = require('./mediaRequests');
 
 // Always aborted: Ping (beacons) carries nothing the session needs. Chrome's
 // Fetch filter rejects TextTrack, Manifest, Prefetch, EventSource and
@@ -22,8 +23,9 @@ const { BLOCKED_REQUEST_PATTERNS } = require('../../../config/blockedRequestPatt
 // session creation); subtitles and manifests are tiny, and prefetches are
 // caught via 'Other' below.
 const ALWAYS_BLOCKED_RESOURCE_TYPES = ['Ping'];
-// Also aborted when media is blocked.
-const MEDIA_RESOURCE_TYPES = ['Image', 'Font', 'Media'];
+// Also aborted when media is blocked: MEDIA_RESOURCE_TYPES, and a service
+// worker's copies of such requests, which arrive as XHR/Fetch (see
+// helpers/mediaRequests.js).
 
 // Subresource types aborted when the URL matches BLOCKED_REQUEST_PATTERNS.
 // Document is deliberately absent: clicking a link that routes through one of
@@ -46,12 +48,12 @@ const isSpeculative = (headers) => {
 
 const isAdRequest = (url) => BLOCKED_REQUEST_PATTERNS.some(pattern => url.includes(pattern));
 
-const buildPatterns = (blockedTypes) => [
+const buildPatterns = (blockedTypes, inspectedTypes) => [
     ...blockedTypes.map(resourceType => ({ urlPattern: '*', resourceType })),
     ...BLOCKED_REQUEST_PATTERNS.flatMap(pattern =>
         AD_RESOURCE_TYPES.map(resourceType => ({ urlPattern: `*${pattern}*`, resourceType }))
     ),
-    ...INSPECTED_RESOURCE_TYPES.map(resourceType => ({ urlPattern: '*', resourceType }))
+    ...inspectedTypes.map(resourceType => ({ urlPattern: '*', resourceType }))
 ];
 
 /**
@@ -67,9 +69,14 @@ const enableRequestBlocking = async (browser, { allowMedia = true } = {}) => {
     const blockedTypes = allowMedia
         ? ALWAYS_BLOCKED_RESOURCE_TYPES
         : [...MEDIA_RESOURCE_TYPES, ...ALWAYS_BLOCKED_RESOURCE_TYPES];
+    const inspectedTypes = allowMedia
+        ? INSPECTED_RESOURCE_TYPES
+        : [...new Set([...INSPECTED_RESOURCE_TYPES, ...FORWARDED_RESOURCE_TYPES])];
 
-    const shouldBlock = ({ resourceType, request }) => {
+    const shouldBlock = (event) => {
+        const { resourceType, request } = event;
         if (blockedTypes.includes(resourceType)) return true;
+        if (!allowMedia && FORWARDED_RESOURCE_TYPES.includes(resourceType) && mediaTypeOf(event)) return true;
         if (INSPECTED_RESOURCE_TYPES.includes(resourceType)) return isSpeculative(request.headers) || isAdRequest(request.url);
         return AD_RESOURCE_TYPES.includes(resourceType) && isAdRequest(request.url);
     };
@@ -89,7 +96,7 @@ const enableRequestBlocking = async (browser, { allowMedia = true } = {}) => {
             }
         }
     });
-    await cdp.send('Fetch.enable', { patterns: buildPatterns(blockedTypes) });
+    await cdp.send('Fetch.enable', { patterns: buildPatterns(blockedTypes, inspectedTypes) });
 };
 
 module.exports = { enableRequestBlocking };
