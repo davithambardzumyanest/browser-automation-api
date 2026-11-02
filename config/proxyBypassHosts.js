@@ -85,6 +85,7 @@ const DEFAULT_PROXY_BYPASS_HOSTS = [
     // proxied static item measured across typical sites.
     '/*.js',
     '/*.mjs',
+    '/*.wasm',
     // Font files
     '/*.woff2',
     '/*.woff',

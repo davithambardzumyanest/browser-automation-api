@@ -6,7 +6,10 @@ const BLOCKED_REQUEST_PATTERNS = [
     'doubleclick',
     'googlesyndication',
     'googleadservices',
-    'googleads'
+    'googleads',
+    // Google Maps usage logging: an empty GIF per pan, zoom or click, up to 26
+    // on a page. The XHR counterpart of gen_204.
+    '/maps/preview/log204'
 ];
 
 

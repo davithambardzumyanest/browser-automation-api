@@ -9,32 +9,34 @@
 // helpers/requestBlocking.js, so every tab is covered from its first request),
 // downloaded here with Node's fetch, and handed back with Fetch.fulfillRequest.
 //
-// Every GET of those types goes direct, from any host, first-party included,
-// except (see directFetchSite):
+// Every GET of those types goes direct, from any host, first-party included.
+// That includes XHR/Fetch requests that are really static files: a service
+// worker's copies and a video player's segments (see helpers/mediaRequests.js).
+// Every other XHR/Fetch is continued untouched. The exceptions (see
+// directFetchSite):
 // - captcha/anti-bot vendors and challenge paths (config/directAssetRules.js),
 // - hosts already on the Chrome bypass list (Chrome fetches those directly
 //   itself, with its own TLS stack),
-// - requests that look dynamic rather than static: a script with a query
-//   string and no static file extension (config endpoints, ad verification),
-//   and tracking pixels - cross-site images with a query string and no image
-//   extension, or any image on a beacon path,
+// - scripts that look dynamic rather than static: a query string and no static
+//   file extension (config endpoints, ad verification),
 // - "Other" requests (preloads, prefetches, favicons) that don't match a
 //   proxyBypass path pattern ("/*.js", "/*.ico", ...).
 // Paused requests carry no cookies (Chrome adds them below the Fetch layer)
 // and the direct fetch sends none.
-// If the direct fetch fails, times out, redirects, answers anything other
+// A redirect is handed to Chrome, which follows it and pauses the next hop
+// here again. If the direct fetch fails, times out, answers anything other
 // than 200/206 or is larger than MAX_DIRECT_BYTES, the request falls back to
 // the proxy, so a page never breaks because of this.
 //
 // Images, fonts and media are the exception: an allowMedia:false session
 // blocks them outright, so an allowMedia:true session must not spend proxy
-// bandwidth on them either. They never fall back - a tracking pixel that
-// would stay on the proxy, or a file whose direct fetch fails, is blocked
-// instead (MEDIA_BLOCKED). A redirect is handed to Chrome, which follows it
-// and pauses the next hop here again. Only anti-bot requests (captcha image
-// tiles) still use the proxy, as they must. That includes the copies a
-// service worker re-fetches, which arrive as XHR/Fetch (see
-// helpers/mediaRequests.js); every other XHR/Fetch is continued untouched.
+// bandwidth on them either. They never fall back - a tracking pixel, or a file
+// whose direct fetch fails, is blocked instead (MEDIA_BLOCKED). Only anti-bot
+// requests (captcha image tiles) still use the proxy, as they must.
+//
+// A video stream signed for the IP that requested it (YouTube's ip= parameter
+// is the proxy's) answers the direct fetch with an error, and is blocked like
+// any other failed media request: the page renders but that video won't play.
 //
 // What a server can see: the server IP instead of the proxy IP for these
 // files, Node's TLS fingerprint instead of Chrome's, and no cookies. The page
@@ -42,7 +44,7 @@
 // connection timing).
 const { getDomain } = require('tldts');
 const { isAntiBotRequest, isTrackingHost } = require('../../../config/directAssetRules');
-const { MEDIA_RESOURCE_TYPES, FORWARDED_RESOURCE_TYPES, mediaTypeOf, getHeader } = require('./mediaRequests');
+const { MEDIA_RESOURCE_TYPES, FORWARDED_RESOURCE_TYPES, VERSIONED_BUNDLE_RE, forwardedTypeOf, getHeader } = require('./mediaRequests');
 
 const DIRECT_RESOURCE_TYPES = ['Script', 'Stylesheet', 'Image', 'Font', 'Media'];
 // What Chrome types <link rel=modulepreload/prefetch>, speculation-rule
@@ -50,13 +52,16 @@ const DIRECT_RESOURCE_TYPES = ['Script', 'Stylesheet', 'Image', 'Font', 'Media']
 // rule alone (beacons and odd fetches land here too), so only taken when the
 // URL matches a proxyBypass path pattern ("/*.js", "/*.ico", ...).
 const PATH_ONLY_RESOURCE_TYPES = ['Other'];
-// directFetchSite's answer for an image that would otherwise stay on the
-// proxy (see the header note).
+// directFetchSite's answer for a tracking pixel (see the header note).
 const MEDIA_BLOCKED = Symbol('media blocked');
-// Google image hosts whose query strings are signatures/sizes on a real
-// image, not tracking (search thumbnails encrypted-tbn0.gstatic.com/images?q=,
-// YouTube thumbnails i.ytimg.com/vi/...?sqp=).
-const GOOGLE_IMAGE_HOST_RE = /^(encrypted-tbn\d+\.gstatic\.com|i\d?\.ytimg\.com|[\w-]+\.googleusercontent\.com|yt\d\.ggpht\.com)$/;
+// Image CDNs of Google and tracker-listed companies, whose query strings are
+// signatures/sizes on a real image, not tracking: anything on gstatic, ggpht or
+// googleusercontent (search thumbnails encrypted-tbn0.gstatic.com/images?q=,
+// favicons, Maps place photos and Street View), YouTube thumbnails
+// i.ytimg.com/vi/...?sqp=, Google Maps tiles and Facebook/Instagram/LinkedIn/
+// TikTok/Pinterest/Reddit media. reCAPTCHA on gstatic never gets this far: it's
+// an anti-bot path.
+const IMAGE_CDN_HOST_RE = /^([\w-]+\.gstatic\.com|i\d?\.ytimg\.com|[\w-]+\.googleusercontent\.com|[\w-]+\.ggpht\.com|maps\.googleapis\.com|streetviewpixels-pa\.googleapis\.com|(khms?|mts?|cbk)\d*\.google(apis)?\.com|[\w.-]+\.fbcdn\.net|[\w.-]+\.cdninstagram\.com|media(-\w+)?\.licdn\.com|[\w.-]+\.tiktokcdn(-\w+)?\.com|[\w-]+\.pinimg\.com|[\w.-]+\.redd\.it|[\w.-]+\.redditmedia\.com)$/;
 const REDIRECT_STATUSES = [301, 302, 303, 307, 308];
 
 const DIRECT_TIMEOUT_MS = 20000;
@@ -90,12 +95,29 @@ const FETCH_METADATA = {
 // prefetch (Sec-Purpose header) is always dest empty.
 // Analytics and ad beacons that arrive as images (Adobe /b/ss/, GA /collect,
 // Google /gen_204 and /pagead/, id-sync pixels).
-const BEACON_PATH_RE = /\/(b\/ss|collect|pixel|beacon|track|gen_204|ping|pagead|sync|setuid|rum|hit|tap\.php|cm|activity|conversion)(\/|\.|\?|$)/i;
-// Static files despite a query string, the same for every visitor: Google's
-// versioned JS/CSS bundles (Search /xjs/_/js/k=...?xjs=s1, Maps
-// /maps/_/js/k=..., /_/ss/k=...) and Google tag scripts (gtag/js?id=...,
-// gtm.js?id=..., also on a site's own server-side tagging host).
-const VERSIONED_BUNDLE_RE = /\/_\/(js|ss)\/k=|\/gtag\/js$|\/gtm\.js$/;
+const BEACON_PATH_RE = /\/(b\/ss|collect|pixel|beacon|track|gen_204|generate_204|ping|pagead|sync|usersync\d*|cksync|cookie[-_]?sync|setuid|rum|hit|tap\.php|cm|activity|conversion)(\/|\.|\?|$)/i;
+// A path can read like a beacon and still be a picture
+// (/track/album-cover.jpg, /collect/summer.png). GIF stays out: it's the
+// classic pixel format.
+const PHOTO_FILE_RE = /\.(jpe?g|png|webp|avif|svg)$/i;
+// Ad-tech id-sync pixels on hosts no list can keep up with: named for what they
+// do (sync.1rx.io, pixel-sync.sitescout.com), or carrying consent strings or a
+// redirect target no image CDN needs.
+const SYNC_HOST_RE = /(^|[.-])(\w*sync|pixel|match|cookie|beacon|tracking|tracker|analytics|adx?|rtb)\d*([.-])/i;
+const SYNC_QUERY_RE = /^(gdpr|gdpr_consent|us_privacy|gpp|gpp_sid|redir|redirect|rurl|puid|partner_uid|external_user_id)$/i;
+
+/**
+ * Whether an image is a tracking pixel. Only on evidence: an image with a query
+ * string and no extension is far more often a real one (i.vimeocdn.com/video/
+ * 123-d_640?region=us, pbs.twimg.com/media/x?format=jpg, resizing CDNs) than a
+ * pixel, and a pixel this misses costs one small direct fetch, while blocking a
+ * real image breaks the page.
+ */
+const isTrackingPixel = (url, fetchSite, tracking) => {
+    if (BEACON_PATH_RE.test(url.pathname) && !PHOTO_FILE_RE.test(url.pathname)) return true;
+    if (!url.search || fetchSite !== 'cross-site') return false;
+    return tracking || SYNC_HOST_RE.test(url.hostname) || [...url.searchParams.keys()].some(key => SYNC_QUERY_RE.test(key));
+};
 
 // Same-origin/same-site/cross-site, as Chrome computes Sec-Fetch-Site.
 const fetchSiteOf = (pageUrl, requestUrl) => {
@@ -118,11 +140,23 @@ const otherFetchMetadata = (pathname, headers) => {
     return { dest: 'empty', mode: 'no-cors' };
 };
 
-// Fetch metadata for a service worker's copy of a media request: an image
-// keeps its destination (fetch(event.request)); anything recognised only by
-// its extension may equally be the page's own fetch(), so it's sent as one.
-const forwardedFetchMetadata = (headers) =>
-    /^image\//i.test(getHeader(headers, 'accept') || '') ? FETCH_METADATA.Image : { dest: 'empty', mode: 'cors' };
+// Fetch metadata for a forwarded request: an image or stylesheet keeps its
+// destination (fetch(event.request)); anything recognised only by its URL may
+// equally be the page's own fetch(), so it's sent as one.
+const forwardedFetchMetadata = (headers) => {
+    const accept = getHeader(headers, 'accept') || '';
+    if (/^image\//i.test(accept)) return FETCH_METADATA.Image;
+    if (/^text\/css/i.test(accept)) return FETCH_METADATA.Stylesheet;
+    return { dest: 'empty', mode: 'cors' };
+};
+
+// The bytes of a POST: postDataEntries, because Chrome's postData string is a
+// lossy text rendering of a binary body.
+const requestBodyOf = ({ method, hasPostData, postDataEntries }) => {
+    if (method === 'GET' || !hasPostData) return undefined;
+    if (!postDataEntries) throw new Error('request body unavailable');
+    return Buffer.concat(postDataEntries.map(entry => Buffer.from(entry.bytes || '', 'base64')));
+};
 
 const siteOf = (url) => {
     try {
@@ -183,8 +217,10 @@ const enableDirectAssets = async (browser, { bypassHosts = [], bypassPaths = [],
         ? DIRECT_RESOURCE_TYPES
         : DIRECT_RESOURCE_TYPES.filter(type => !MEDIA_RESOURCE_TYPES.includes(type));
     const interceptedTypes = bypassPaths.length ? [...resourceTypes, ...PATH_ONLY_RESOURCE_TYPES] : resourceTypes;
-    // Paused for service-worker copies of media requests (see the header note).
-    const pausedTypes = allowMedia ? [...interceptedTypes, ...FORWARDED_RESOURCE_TYPES] : interceptedTypes;
+    // Paused for static files that arrive as XHR/Fetch (see the header note).
+    // With allowMedia:false their images, fonts and media never get here:
+    // helpers/requestBlocking.js has already blocked them.
+    const pausedTypes = [...interceptedTypes, ...FORWARDED_RESOURCE_TYPES];
 
     // frameId -> Puppeteer Frame, rebuilt from browser.pages() on a miss.
     let frames = new Map();
@@ -201,8 +237,10 @@ const enableDirectAssets = async (browser, { bypassHosts = [], bypassPaths = [],
     // Decide from the paused event whether this request goes direct: the
     // Sec-Fetch-Site value to send with it, null to keep it on the proxy, or
     // MEDIA_BLOCKED.
-    const directFetchSite = async ({ request, resourceType, frameId }) => {
-        if (request.method !== 'GET' || !interceptedTypes.includes(resourceType)) return null;
+    const directFetchSite = async ({ request, resourceType, frameId, forwarded }) => {
+        // Only a video stream goes direct as a POST (see mediaTypeOf).
+        const streamPost = forwarded && resourceType === 'Media';
+        if ((request.method !== 'GET' && !streamPost) || !interceptedTypes.includes(resourceType)) return null;
 
         let url;
         try {
@@ -233,10 +271,8 @@ const enableDirectAssets = async (browser, { bypassHosts = [], bypassPaths = [],
             return fetchSite;
         }
         if (resourceType === 'Image') {
-            if (BEACON_PATH_RE.test(url.pathname)) return MEDIA_BLOCKED;
-            if (GOOGLE_IMAGE_HOST_RE.test(url.hostname)) return fetchSite;
-            if (hasQuery && fetchSite === 'cross-site' && (tracking || !staticPath)) return MEDIA_BLOCKED;
-            return fetchSite;
+            if (IMAGE_CDN_HOST_RE.test(url.hostname)) return fetchSite;
+            return isTrackingPixel(url, fetchSite, tracking) ? MEDIA_BLOCKED : fetchSite;
         }
         // Stylesheet, Font, Media
         return fetchSite;
@@ -265,6 +301,8 @@ const enableDirectAssets = async (browser, { bypassHosts = [], bypassPaths = [],
         }
 
         const response = await fetch(request.url, {
+            method: request.method,
+            body: requestBodyOf(request),
             headers,
             redirect: 'manual',
             signal: AbortSignal.timeout(DIRECT_TIMEOUT_MS)
@@ -273,7 +311,7 @@ const enableDirectAssets = async (browser, { bypassHosts = [], bypassPaths = [],
         for (const [name, value] of response.headers) {
             if (!DROPPED_RESPONSE_HEADERS.has(name.toLowerCase())) responseHeaders.push({ name, value });
         }
-        if (MEDIA_RESOURCE_TYPES.includes(resourceType) && REDIRECT_STATUSES.includes(response.status) && response.headers.has('location')) {
+        if (REDIRECT_STATUSES.includes(response.status) && response.headers.has('location')) {
             response.body?.cancel().catch(() => {});
             return { status: response.status, headers: responseHeaders, body: Buffer.alloc(0) };
         }
@@ -287,14 +325,22 @@ const enableDirectAssets = async (browser, { bypassHosts = [], bypassPaths = [],
         return { status: response.status, headers: responseHeaders, body };
     };
 
+    // Media has no fallback, so a dropped connection would cost the image: it
+    // gets one more try. Only connection-level errors, which carry a code; a
+    // timeout has already waited DIRECT_TIMEOUT_MS.
+    const fetchMediaWithRetry = (event, fetchSite) => fetchDirect(event, fetchSite).catch(error => {
+        if (!MEDIA_RESOURCE_TYPES.includes(event.resourceType) || !error.cause?.code) throw error;
+        return fetchDirect(event, fetchSite);
+    });
+
     const cdp = await browser.target().createCDPSession();
     cdp.on('Fetch.requestPaused', async (pausedEvent) => {
-        // A service worker's copy of an image/font/media request is handled as
-        // that type; any other XHR/Fetch is continued untouched.
+        // A static file that arrived as XHR/Fetch is handled as its real type;
+        // any other XHR/Fetch is continued untouched.
         let event = pausedEvent;
         if (FORWARDED_RESOURCE_TYPES.includes(pausedEvent.resourceType)) {
-            const mediaType = mediaTypeOf(pausedEvent);
-            event = mediaType ? { ...pausedEvent, resourceType: mediaType, forwarded: true } : null;
+            const staticType = forwardedTypeOf(pausedEvent);
+            event = staticType ? { ...pausedEvent, resourceType: staticType, forwarded: true } : null;
         }
         const isMedia = Boolean(event) && MEDIA_RESOURCE_TYPES.includes(event.resourceType);
 
@@ -307,7 +353,7 @@ const enableDirectAssets = async (browser, { bypassHosts = [], bypassPaths = [],
                     blocked = true;
                     if (DEBUG) console.log(`[direct-asset] blocked ${event.resourceType} ${event.request.url}`);
                 } else if (fetchSite) {
-                    direct = await fetchDirect(event, fetchSite).catch(error => ({ fallback: error.cause?.code || error.message }));
+                    direct = await fetchMediaWithRetry(event, fetchSite).catch(error => ({ fallback: error.cause?.code || error.message }));
                     if (direct.fallback) {
                         // See the header note: media never falls back.
                         blocked = isMedia;

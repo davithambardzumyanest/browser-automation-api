@@ -53,7 +53,7 @@ const TRACKER_DOMAINS = [
     'scorecardresearch.com', 'chartbeat.com', 'chartbeat.net', 'criteo.com',
     'criteo.net', 'taboola.com', 'outbrain.com', 'adnxs.com', 'rubiconproject.com',
     'pubmatic.com', 'openx.net', 'amazon-adsystem.com', 'adsrvr.org',
-    'tiktok.com', 'tiktokcdn.com', 'snapchat.com', 'sc-static.net', 'twitter.com',
+    'tiktok.com', 'tiktokcdn.com', 'snapchat.com', 'sc-static.net', 'twitter.com', 't.co',
     'x.com', 'ads-twitter.com', 'pinterest.com', 'pinimg.com', 'reddit.com',
     'redditstatic.com', 'yandex.ru', 'mc.yandex.ru', 'usefathom.com',
     'carbonads.com', 'carbonads.net', 'buysellads.com', 'buysellads.net',
@@ -74,8 +74,9 @@ const TRACKER_DOMAINS = [
 ];
 
 // Challenge and bot-manager paths served from the visited site's own domain
-// (reCAPTCHA, Cloudflare, Akamai, Imperva).
-const ANTIBOT_PATH_RE = /\/(recaptcha|cdn-cgi|akam|_Incapsula_Resource|captcha)(\/|\.|$)/i;
+// (reCAPTCHA, Cloudflare, Akamai, Imperva). Cloudflare's image resizing also
+// lives under /cdn-cgi/ (/cdn-cgi/image/width=300/hero.jpg) but is just files.
+const ANTIBOT_PATH_RE = /\/(recaptcha|cdn-cgi(?!\/(image|imagedelivery)\/)|akam|_Incapsula_Resource|captcha)(\/|\.|$)/i;
 
 const matchesDomain = (hostname, domains) =>
     domains.some(domain => hostname === domain || hostname.endsWith(`.${domain}`));

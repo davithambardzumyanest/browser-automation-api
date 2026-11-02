@@ -1,7 +1,8 @@
 // Proxy bandwidth saving: requests a session never needs are aborted before
-// they leave the browser. Ads, beacons and prefetches are blocked in every
-// session; images, fonts and media only in allowMedia:false sessions (with
-// allowMedia:true they go direct instead - see helpers/directAssets.js).
+// they leave the browser. Ads, beacons, prefetches and compression
+// dictionaries are blocked in every session; images, fonts and media only in
+// allowMedia:false sessions (with allowMedia:true they go direct instead - see
+// helpers/directAssets.js).
 //
 // Interception runs on a single browser-level CDP session instead of per page
 // (page.setRequestInterception). Two reasons:
@@ -37,8 +38,14 @@ const AD_RESOURCE_TYPES = ['Script', 'Stylesheet', 'XHR'];
 // from the browser target, Chrome reports a prefetch as 'Fetch' (as 'Other'
 // from a page target), so it's recognised by its Sec-Purpose header. Blocking
 // one is harmless: a real request for the same URL later fetches it normally.
+// Same for compression dictionaries (<link rel=compression-dictionary>), which
+// Chrome downloads in the background to shrink a site's later pages: 438 KB on
+// a Google search whose page is otherwise 200 KB. Without one, responses just
+// use ordinary compression.
 // Everything else here is continued untouched.
 const INSPECTED_RESOURCE_TYPES = ['Fetch', 'Other'];
+
+const COMPRESSION_DICTIONARY_RE = /\/shared_dict\/|\/compression-dictionar(y|ies)\b/i;
 
 const isSpeculative = (headers) => {
     const purpose = Object.entries(headers || {})
@@ -57,8 +64,8 @@ const buildPatterns = (blockedTypes, inspectedTypes) => [
 ];
 
 /**
- * Block ads, beacons and prefetches (and, unless allowMedia, media and
- * fonts) across every tab of the browser.
+ * Block ads, beacons, prefetches and compression dictionaries (and, unless
+ * allowMedia, media and fonts) across every tab of the browser.
  *
  * @param {Object} browser - Puppeteer browser
  * @param {Object} [options]
@@ -77,7 +84,7 @@ const enableRequestBlocking = async (browser, { allowMedia = true } = {}) => {
         const { resourceType, request } = event;
         if (blockedTypes.includes(resourceType)) return true;
         if (!allowMedia && FORWARDED_RESOURCE_TYPES.includes(resourceType) && mediaTypeOf(event)) return true;
-        if (INSPECTED_RESOURCE_TYPES.includes(resourceType)) return isSpeculative(request.headers) || isAdRequest(request.url);
+        if (INSPECTED_RESOURCE_TYPES.includes(resourceType)) return isSpeculative(request.headers) || isAdRequest(request.url) || COMPRESSION_DICTIONARY_RE.test(request.url);
         return AD_RESOURCE_TYPES.includes(resourceType) && isAdRequest(request.url);
     };
 
