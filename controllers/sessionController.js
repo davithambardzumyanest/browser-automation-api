@@ -4,6 +4,7 @@ const { Stagehand } = require('@browserbasehq/stagehand');
 const { v4: uuidv4 } = require('uuid');
 const { cleanupStaleProfileLocks } = require('../utils/browserProfile');
 const AIService = require('../services/aiService');
+const { enableRequestBlocking } = require('./session/helpers/requestBlocking');
 
 // Add stealth plugin
 puppeteer.use(StealthPlugin());
@@ -2450,6 +2451,9 @@ const createSession = async (req, res) => {
         // Confirmed empirically: switching off the real-Chrome channel made
         // the reCAPTCHA challenge stop appearing.
         const browser = await puppeteer.launch(launchOptions);
+        // Before any page exists, so every tab is covered from its first
+        // request - see session/helpers/requestBlocking.js.
+        await enableRequestBlocking(browser, { allowMedia });
         const context = browser.defaultBrowserContext();
 
         // Set up realistic permissions. 'geolocation' is deliberately NOT
@@ -2641,27 +2645,6 @@ const createSession = async (req, res) => {
             }
         }
 
-        let isIntercepting = false;
-
-        // Enable request interception to block images, fonts, and stylesheets
-        await page.setRequestInterception(true);
-        if (!isIntercepting) {
-            isIntercepting = true;
-            page.on('request', async (request) => {
-                try {
-                    if (!allowMedia && ['image', 'font', 'media', 'imageset'].includes(request.resourceType())) {
-                        await request.abort();
-                    } else {
-                        await request.continue();
-                    }
-                } catch (error) {
-                    // Ignore errors from aborted requests
-                    if (!error.message.includes('Request is already handled')) {
-                        console.error('Request interception error:', error);
-                    }
-                }
-            });
-        }
         const stagehand = new Stagehand({
             env: 'LOCAL',
             localBrowserLaunchOptions: {
