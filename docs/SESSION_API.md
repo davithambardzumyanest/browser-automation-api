@@ -274,28 +274,35 @@ Reloads the current page and returns updated title/url metadata.
 
 **POST** `/:sessionId/screenshot`
 
-Waits briefly for dynamic content and returns a screenshot binary (JPEG by default).
+Waits briefly for dynamic content and returns a screenshot binary (WebP by default, at most 10KB by default).
 
 ### Request body (example)
 
 ```json
 {
   "fullPage": true,
-  "type": "jpeg",
-  "quality": 70
+  "type": "webp",
+  "quality": 70,
+  "maxBytes": 10240
 }
 ```
 
 - `fullPage` (default `true`) - capture the full scrollable page; ignored with `selector`
-- `type` (default `"jpeg"`) - `"jpeg"`/`"jpg"`, `"webp"` or `"png"`
-- `quality` (default `70`) - 1-100, JPEG/WebP only
+- `type` (default `"webp"`) - `"webp"`, `"jpeg"`/`"jpg"` or `"png"`
+- `quality` (default `70`) - 1-100, starting quality for WebP/JPEG
+- `maxBytes` (default `10240`) - size limit; `0` turns it off, otherwise at least 1024
 - `selector` (optional) - capture only the first matching element (404 if none)
 
-WebP cannot exceed 16383px per side, so taller full-page WebP captures fall back to JPEG.
+To stay under `maxBytes`, the image is first scaled down (to no less than 240px wide),
+then quality is lowered (down to 10), and as a last resort only the top of a very tall
+page is kept. PNG switches to WebP if it can't fit. WebP can't exceed 16383px per side,
+so larger captures fall back to JPEG.
 
 ### Success response
 
-- Content-Type: `image/jpeg`, `image/webp` or `image/png` (the format actually returned)
+- Content-Type: `image/webp`, `image/jpeg` or `image/png` (the format actually returned)
+- `X-Screenshot-Scale`, `X-Screenshot-Quality` - scale and quality used
+- `X-Screenshot-Cropped: true` - only the top of the page fit
 - Body: binary image data
 
 ### Error response

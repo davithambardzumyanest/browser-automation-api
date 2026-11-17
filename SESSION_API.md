@@ -307,24 +307,33 @@ Take a screenshot of the current page. This will always capture the first tab if
 ```json
 {
   "fullPage": true,
+  "type": "webp",
   "quality": 70,
-  "type": "jpeg"
+  "maxBytes": 10240
 }
 ```
 
 **Parameters:**
 - `fullPage` (boolean, optional, default: true) - Capture the full scrollable page (ignored when `selector` is set)
-- `quality` (number, optional, default: 70) - Image quality (1-100) for JPEG/WebP; ignored for PNG
-- `type` (string, optional, default: 'jpeg') - Image format: 'jpeg' (or 'jpg'), 'webp' or 'png'
+- `type` (string, optional, default: 'webp') - Image format: 'webp', 'jpeg' (or 'jpg') or 'png'
+- `quality` (number, optional, default: 70) - Starting image quality (1-100) for WebP/JPEG; ignored for PNG
+- `maxBytes` (number, optional, default: 10240) - Size limit for the image. `0` turns the limit off; otherwise at least 1024
 - `selector` (string, optional) - CSS selector to capture specific element (404 if nothing matches)
 
-JPEG is the default because it is 2-6x smaller than PNG on typical pages. WebP is about
-25% smaller again, but it cannot exceed 16383px per side, so a taller full-page WebP
-capture falls back to JPEG automatically. Check the response `Content-Type` for the
-format actually returned. Use `"type": "png"` when you need lossless output.
+Screenshots are kept under `maxBytes` (10KB by default). The image is first scaled
+down (to no less than 240px wide), then quality is lowered (down to 10). If a very tall
+page still doesn't fit, only the top of the page is returned. PNG can't be compressed
+far enough, so it switches to WebP when needed. WebP is the default because it is about
+half the size of JPEG for the same page, and all current browsers display it.
+WebP can't be taller or wider than 16383px, so larger captures fall back to JPEG.
 
-**Response:** Image file (`image/jpeg`, `image/webp` or `image/png`). An invalid `type` or
-`quality` returns 400.
+Response headers describe the image you got back:
+- `Content-Type` - format actually returned (`image/webp`, `image/jpeg` or `image/png`)
+- `X-Screenshot-Scale` - scale applied to the page (1 = full resolution)
+- `X-Screenshot-Quality` - quality used (WebP/JPEG only)
+- `X-Screenshot-Cropped: true` - only the top of the page fit in `maxBytes`
+
+**Response:** Image file. An invalid `type`, `quality` or `maxBytes` returns 400.
 
 #### 8. Execute JavaScript
 ```
