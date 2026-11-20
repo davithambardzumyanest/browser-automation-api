@@ -339,9 +339,16 @@ Execute JavaScript in the page context.
 {
   "success": true,
   "sessionId": "550e8400-e29b-41d4-a716-446655440000",
-  "result": "Google"
+  "jobId": "ca5c39bd-…",
+  "status": "succeeded",
+  "result": "Google",
+  "url": "https://www.google.com/",
+  "navigated": false,
+  "durationMs": 120
 }
 ```
+
+The script is an async function body (`await`, `args`, `signal` available). Errors carry `error_code` + `retryable`; also supports `actionId` idempotency, background jobs with polling/cancel, `waitFor` conditions, `frame` targeting and failure evidence. Full reference: [docs/EXECUTE_API.md](docs/EXECUTE_API.md).
 
 #### 9. Run Stagehand Actions
 ```

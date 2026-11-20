@@ -5,15 +5,16 @@ const { v4: uuidv4 } = require('uuid');
 const { cleanupStaleProfileLocks } = require('../utils/browserProfile');
 const AIService = require('../services/aiService');
 const { enableRequestBlocking } = require('./session/helpers/requestBlocking');
+const { sessions, markSessionClosed } = require('./session/sessionStore');
+const { describeActiveOperation } = require('./session/helpers/sessionLock');
+const { executeScriptSession, getExecuteJob, cancelExecuteJob } = require('./session/executeScript');
+const { getPageRecorder } = require('./session/helpers/failureEvidence');
 
 // Add stealth plugin
 puppeteer.use(StealthPlugin());
 
 // Initialize AI service on startup
 AIService.initialize();
-
-// Session storage
-const sessions = new Map();
 
 // Session cleanup interval (check every minute)
 const CLEANUP_INTERVAL = 60000; // 1 minute
@@ -603,6 +604,8 @@ const startCleanupWorker = () => {
         const sessionsToDelete = [];
 
         for (const [sessionId, session] of sessions.entries()) {
+            // Never reap a session mid-command (e.g. a long execute job).
+            if (describeActiveOperation(session)) continue;
             if (now - session.lastUsed > SESSION_TIMEOUT) {
                 console.log(`Cleaning up inactive session: ${sessionId}`);
                 sessionsToDelete.push(sessionId);
@@ -2689,6 +2692,9 @@ const createSession = async (req, res) => {
         };
         
         sessions.set(sessionId, sessionData);
+        // Start the console/network error log for failure evidence now, so it
+        // covers the first page load too.
+        getPageRecorder(page);
 
         // Apply stealth mode if enabled
         if (stealth) {
@@ -2853,6 +2859,8 @@ const getSession = (req, res) => {
         sessionId,
         created: new Date(session.created).toISOString(),
         lastUsed: new Date(session.lastUsed).toISOString(),
+        busy: !!describeActiveOperation(session),
+        activeOperation: describeActiveOperation(session),
         config: session.config
     });
 };
@@ -3125,41 +3133,7 @@ const screenshotSession = async (req, res) => {
     }
 };
 
-// Execute script
-const executeScriptSession = async (req, res) => {
-    const { sessionId } = req.params;
-    const { script } = req.body;
-
-    if (!script) {
-        return res.status(400).json({ error: 'Script is required' });
-    }
-
-    if (!sessions.has(sessionId)) {
-        return res.status(404).json({
-            error: 'Session not found',
-            message: `Session ${sessionId} does not exist or has expired`
-        });
-    }
-
-    const session = sessions.get(sessionId);
-    session.lastUsed = Date.now();
-
-    try {
-        const result = await session.page.evaluate(`(() => { ${script} })()`);
-
-        res.json({
-            success: true,
-            sessionId,
-            result
-        });
-    } catch (error) {
-        console.error('Error executing script:', error);
-        res.status(500).json({
-            error: 'Failed to execute script',
-            message: error.message
-        });
-    }
-};
+// Execute script: see ./session/executeScript.js
 
 /**
  * Check if an XPath exists on the page
@@ -5329,6 +5303,7 @@ const closeSession = async (sessionId) => {
             console.error(`Error closing session ${sessionId}:`, error);
         }
         sessions.delete(sessionId);
+        markSessionClosed(sessionId);
 
         // Remove the throwaway per-session profile dir created for sessions
         // that didn't request a persistent profileId/userDataDir, so it can't
@@ -6576,6 +6551,8 @@ module.exports = {
     closeAllSessions,
     screenshotSession,
     executeScriptSession,
+    getExecuteJob,
+    cancelExecuteJob,
     clickSession,
     clickByCoordinates,
     typeSession,

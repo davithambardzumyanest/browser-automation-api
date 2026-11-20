@@ -300,33 +300,19 @@ Waits briefly for dynamic content and returns a PNG screenshot binary.
 
 **POST** `/:sessionId/execute`
 
-Runs JavaScript in the page context using `page.evaluate(script)`.
-
-### Request body (example)
+Runs JavaScript in the page. `script` is the body of an async function (use `return`; `await`, `args` and `signal` are available).
 
 ```json
-{
-  "script": "() => document.title"
-}
+{ "script": "return document.title" }
 ```
-
-### Success response
 
 ```json
-{
-  "success": true,
-  "sessionId": "550e8400-e29b-41d4-a716-446655440000",
-  "result": "Example Domain"
-}
+{ "success": true, "sessionId": "550e8400-…", "jobId": "…", "status": "succeeded", "result": "Example Domain", "url": "https://example.com/", "navigated": false, "durationMs": 120 }
 ```
 
-### Validation error
+Failures return `error_code` (`SCRIPT_EXCEPTION`, `TIMEOUT`, `CONTEXT_DESTROYED`, `SELECTOR_MISSING`, `SESSION_CLOSED`, `SESSION_BUSY`, …), `retryable`, and redacted evidence. Also supports `actionId` idempotency, background jobs (`GET /:sessionId/execute/:jobId`, `POST …/cancel`), `waitFor` conditions and `frame` targeting.
 
-```json
-{
-  "error": "Script is required"
-}
-```
+**Full reference: [EXECUTE_API.md](./EXECUTE_API.md)**
 
 ---
 
@@ -1139,7 +1125,7 @@ curl -X POST http://localhost:3000/api/session/<sessionId>/goto \
 # 3) Extract title with execute
 curl -X POST http://localhost:3000/api/session/<sessionId>/execute \
   -H "Content-Type: application/json" \
-  -d '{"script":"() => document.title"}'
+  -d '{"script":"return document.title"}'
 
 # 4) Close session
 curl -X DELETE http://localhost:3000/api/session/<sessionId>
